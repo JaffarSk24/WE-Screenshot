@@ -58,7 +58,7 @@ Mouse: with no tool active, drag on the dimmed area to start a selection, drag i
 
 ## Google Drive setup
 
-Uploading and "Search similar images" need a Google OAuth client. If the build you use has one built in, there is nothing to set up: open Settings, press Sign In and approve access in your browser.
+Uploading and "Search similar images" need a Google OAuth client. The released builds (from version 0.9.1) have one built in, so there is nothing to set up: open Settings, press Sign In, choose your Google account and approve access in your browser.
 
 The rest of this section is for a build without a built-in client, for people who build the app themselves, and for those who prefer their own client. Google's OAuth policies forbid publishing client credentials in a public repository, so the source code contains none. There are two ways to supply a client:
 
