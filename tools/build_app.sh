@@ -9,6 +9,11 @@
 # JOBS limits the number of parallel compile jobs, for example JOBS=4.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The build folders are links to *.nosync folders, which iCloud Drive does not
+# copy to other Macs: create the missing ones.
+for link in .build build; do
+  [[ -L "$link" && ! -e "$link" ]] && mkdir -p "$(readlink "$link")"
+done
 IDENTITY="${SIGN_IDENTITY:-WE Screenshot Local Signing}"
 BUNDLE_ID=sk.whiteeagles.screenshot
 NAME="WE Screenshot"
