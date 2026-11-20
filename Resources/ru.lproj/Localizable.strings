@@ -26,12 +26,13 @@
 "The download was incomplete." = "Загрузка не завершена.";
 "The downloaded archive does not contain the expected app." = "В скачанном архиве нет нужного приложения.";
 "The new app is not signed like this one." = "Подпись нового приложения отличается от подписи этого.";
-"Link to the uploaded screenshot" = "Ссылка на загруженный скриншот";
 "Close" = "Закрыть";
+"Link to the uploaded screenshot" = "Ссылка на загруженный скриншот";
 "Uploading the screenshot…" = "Загружаю скриншот…";
 "The link is in the clipboard" = "Ссылка в буфере обмена";
 "Copy" = "Скопировать";
 "Open" = "Открыть";
+"Link copied" = "Ссылка скопирована";
 "Copied" = "Скопировано";
 "Google Drive upload is not set up in this build." = "Загрузка в Google Drive не настроена в этой сборке.";
 "Not signed in to Google Drive." = "Вход в Google Drive не выполнен.";

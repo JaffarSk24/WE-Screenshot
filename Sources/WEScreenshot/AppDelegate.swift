@@ -216,8 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             print(path)
         }
+        let line = UploadPanelPreview.simulateCopyClick()
+        print(line)
         fflush(stdout)
-        exit(0)
+        exit(line.contains("action=yes") && line.contains("pasteboard=ok") ? 0 : 1)
     }
 
     /// Shows the real overlay for a moment and photographs the screen with it

@@ -16,7 +16,6 @@ private enum PanelStyle {
     static let doneHeight: CGFloat = 112
 }
 
-/// A flat button that reads well on the dark blue panel.
 /// Measures button titles in the font the panel buttons use.
 private enum PillButtonMetrics {
     static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -26,28 +25,98 @@ private enum PillButtonMetrics {
     }
 }
 
-private final class PanelButton: NSButton {
+/// A button that draws itself and handles the mouse itself. NSButton tracks
+/// the mouse in a modal loop, which is unreliable in a non-activating panel
+/// that is shown while another app is active; this view reacts to plain
+/// mouseDown and mouseUp events instead and works on the first click.
+private final class PanelControl: NSView {
+    enum Style { case pill, close }
+
+    let style: Style
+    var onPress: (() -> Void)?
+    var title = "" {
+        didSet { needsDisplay = true }
+    }
     var filled = false {
         didSet { needsDisplay = true }
     }
+    var isEnabled = true {
+        didSet { needsDisplay = true }
+    }
+    private var pressed = false {
+        didSet { needsDisplay = true }
+    }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        isBordered = false
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        focusRingType = .none
+    override var isFlipped: Bool { true }
+
+    init(style: Style) {
+        self.style = style
+        super.init(frame: .zero)
+        setAccessibilityRole(.button)
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func setLabel(_ text: String) {
-        attributedTitle = NSAttributedString(string: text, attributes: [
-            .font: PillButtonMetrics.font,
-            .foregroundColor: NSColor.white,
-        ])
-        setAccessibilityLabel(text)
-        layer?.backgroundColor = (filled ? PanelStyle.accent : PanelStyle.field).cgColor
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var acceptsFirstResponder: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = isInside(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let fire = pressed && isEnabled && isInside(event)
+        pressed = false
+        if fire { onPress?() }
+    }
+
+    private func isInside(_ event: NSEvent) -> Bool {
+        bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        switch style {
+        case .pill:
+            let base = filled ? PanelStyle.accent : PanelStyle.field
+            let color = pressed ? (base.blended(withFraction: 0.25, of: .black) ?? base) : base
+            color.setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: PillButtonMetrics.font,
+                .foregroundColor: NSColor.white.withAlphaComponent(isEnabled ? 1 : 0.5),
+            ]
+            let size = (title as NSString).size(withAttributes: attributes)
+            (title as NSString).draw(at: NSPoint(x: bounds.midX - size.width / 2,
+                                                 y: bounds.midY - size.height / 2),
+                                     withAttributes: attributes)
+        case .close:
+            NSColor.white.withAlphaComponent(pressed ? 1 : 0.7).setStroke()
+            let inset: CGFloat = 6
+            let path = NSBezierPath()
+            path.lineWidth = 1.6
+            path.lineCapStyle = .round
+            path.move(to: NSPoint(x: inset, y: inset))
+            path.line(to: NSPoint(x: bounds.width - inset, y: bounds.height - inset))
+            path.move(to: NSPoint(x: bounds.width - inset, y: inset))
+            path.line(to: NSPoint(x: inset, y: bounds.height - inset))
+            path.stroke()
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityLabel() -> String? {
+        style == .close ? L("Close") : title
+    }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        onPress?()
+        return true
     }
 }
 
@@ -64,12 +133,13 @@ private final class UploadPanelView: NSView {
     private let linkField = NSTextField(string: "")
     /// Holds the field with some padding; the field itself has no inset.
     private let linkBox = NSView()
-    private let copyButton = PanelButton(frame: .zero)
-    private let openButton = PanelButton(frame: .zero)
-    private let closeButton = NSButton()
+    private let copyButton = PanelControl(style: .pill)
+    private let openButton = PanelControl(style: .pill)
+    private let closeButton = PanelControl(style: .close)
     private(set) var state: UploadPanelState = .uploading
 
     override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     var isEditingLink: Bool { linkField.currentEditor() != nil }
 
@@ -112,31 +182,17 @@ private final class UploadPanelView: NSView {
         addSubview(linkBox)
 
         copyButton.filled = true
-        copyButton.target = self
-        copyButton.action = #selector(copyPressed)
-        openButton.target = self
-        openButton.action = #selector(openPressed)
+        copyButton.onPress = { [weak self] in self?.onCopy?() }
+        openButton.onPress = { [weak self] in self?.onOpen?() }
+        closeButton.onPress = { [weak self] in self?.onClose?() }
         addSubview(copyButton)
         addSubview(openButton)
-
-        closeButton.isBordered = false
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: L("Close"))
-        closeButton.contentTintColor = NSColor.white.withAlphaComponent(0.7)
-        closeButton.imageScaling = .scaleProportionallyDown
-        closeButton.setAccessibilityLabel(L("Close"))
-        closeButton.target = self
-        closeButton.action = #selector(closePressed)
-        closeButton.focusRingType = .none
         addSubview(closeButton)
 
         apply(.uploading)
     }
 
     required init?(coder: NSCoder) { nil }
-
-    @objc private func copyPressed() { onCopy?() }
-    @objc private func openPressed() { onOpen?() }
-    @objc private func closePressed() { onClose?() }
 
     func apply(_ newState: UploadPanelState) {
         state = newState
@@ -161,8 +217,9 @@ private final class UploadPanelView: NSView {
             progress.isHidden = true
             linkField.stringValue = link.absoluteString
             linkBox.isHidden = false
-            copyButton.setLabel(L("Copy"))
-            openButton.setLabel(L("Open"))
+            copyButton.title = L("Copy")
+            copyButton.filled = true
+            openButton.title = L("Open")
             copyButton.isHidden = false
             openButton.isHidden = false
         }
@@ -171,13 +228,18 @@ private final class UploadPanelView: NSView {
         layoutSubtreeIfNeeded()
     }
 
+    /// The Copy control turns neutral with a check mark and the title says so.
     func showCopied() {
-        copyButton.setLabel(L("Copied"))
+        copyButton.title = Self.copiedTitle
+        copyButton.filled = false
+        titleLabel.stringValue = L("Link copied")
     }
 
-    func resetCopyLabel() {
-        copyButton.setLabel(L("Copy"))
-    }
+    static var copiedTitle: String { "\u{2713} " + L("Copied") }
+    var titleText: String { titleLabel.stringValue }
+    var copyTitle: String { copyButton.title }
+    var copyFrame: NSRect { copyButton.frame }
+    var copyControl: NSView { copyButton }
 
     static func height(for state: UploadPanelState) -> CGFloat {
         if case .done = state { return PanelStyle.doneHeight }
@@ -202,7 +264,7 @@ private final class UploadPanelView: NSView {
             // Copy button is sized for its longer label so it does not jump.
             let openWidth = max(64, ceil(PillButtonMetrics.width(of: L("Open"))) + 24)
             let copyWidth = max(76, ceil(max(PillButtonMetrics.width(of: L("Copy")),
-                                             PillButtonMetrics.width(of: L("Copied")))) + 24)
+                                             PillButtonMetrics.width(of: Self.copiedTitle))) + 24)
             openButton.frame = NSRect(x: w - 16 - openWidth, y: buttonY, width: openWidth, height: 26)
             copyButton.frame = NSRect(x: openButton.frame.minX - 8 - copyWidth, y: buttonY, width: copyWidth, height: 26)
         }
@@ -237,17 +299,23 @@ private final class FloatingPanel: NSPanel {
 @MainActor
 final class UploadPanelController {
     private static let lingerSeconds: TimeInterval = 12
+    /// How long the confirmation stays after Copy.
+    private static let copiedCloseSeconds: TimeInterval = 0.9
     private static let fadeSeconds: TimeInterval = 0.15
 
     private let panel: FloatingPanel
     private let content: UploadPanelView
     private var hovering = false
     private var closeTimer: Timer?
-    private var copiedTimer: Timer?
+    /// True after Copy: the pop-up is on its way out and hovering no longer keeps it.
+    private var copied = false
+    private let pasteboard: NSPasteboard
+    private(set) var copyCount = 0
     /// Bumped on every show and close, so a late fade-out cannot hide a newer panel.
     private var generation = 0
 
-    init() {
+    init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
         let size = NSSize(width: PanelStyle.width, height: PanelStyle.uploadingHeight)
         content = UploadPanelView(frame: NSRect(origin: .zero, size: size))
         panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -286,6 +354,7 @@ final class UploadPanelController {
     func showUploading(on screen: NSScreen?) {
         generation += 1
         cancelTimers()
+        copied = false
         content.apply(.uploading)
         present(on: screen ?? Self.screenUnderPointer())
     }
@@ -294,6 +363,8 @@ final class UploadPanelController {
     func showDone(link: URL) {
         generation += 1
         cancelTimers()
+        copied = false
+        panel.setAccessibilityLabel(L("The link is in the clipboard"))
         content.apply(.done(link))
         if !panel.isVisible { present(on: nil) } else { resizeKeepingCorner() }
         scheduleClose()
@@ -364,15 +435,13 @@ final class UploadPanelController {
 
     private func copyLink() {
         guard case .done(let link) = content.state else { return }
-        let pasteboard = NSPasteboard.general
+        copyCount += 1
         pasteboard.clearContents()
         pasteboard.setString(link.absoluteString, forType: .string)
+        copied = true
         content.showCopied()
-        copiedTimer?.invalidate()
-        copiedTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in self.content.resetCopyLabel() }
-        }
+        panel.setAccessibilityLabel(L("Link copied"))
+        scheduleClose(after: Self.copiedCloseSeconds)
     }
 
     private func openLink() {
@@ -383,7 +452,7 @@ final class UploadPanelController {
 
     private func hoverChanged(_ inside: Bool) {
         hovering = inside
-        guard case .done = content.state else { return }
+        guard !copied, case .done = content.state else { return }
         if inside {
             closeTimer?.invalidate()
         } else {
@@ -403,6 +472,10 @@ final class UploadPanelController {
         // Never close under the pointer or while the link is being selected.
         // The selection only counts while the panel is key: after the user goes
         // back to another app the field editor stays attached.
+        if copied {
+            close()
+            return
+        }
         let selecting = panel.isKeyWindow && content.isEditingLink
         if hovering || selecting {
             if selecting { scheduleClose(after: 3) }
@@ -414,13 +487,76 @@ final class UploadPanelController {
     private func cancelTimers() {
         closeTimer?.invalidate()
         closeTimer = nil
-        copiedTimer?.invalidate()
-        copiedTimer = nil
     }
+
+    // MARK: Test support
+
+    var titleText: String { content.titleText }
+    var copyTitleText: String { content.copyTitle }
+
+    /// Puts the panel into the done state without ordering it on screen.
+    func prepareDoneForTest(link: URL) {
+        content.apply(.done(link))
+        panel.setContentSize(content.frame.size)
+    }
+
+    /// Delivers a left click at the centre of the Copy control, through the
+    /// panel's event path or straight to the control.
+    func clickCopy(viaWindow: Bool) -> (hit: String, delivery: String) {
+        let frame = content.copyFrame
+        let local = NSPoint(x: frame.midX, y: frame.midY)
+        let inWindow = content.convert(local, to: nil)
+        var hitName = "none"
+        if let parent = content.superview, let hit = parent.hitTest(content.convert(local, to: parent)) {
+            hitName = hit === content.copyControl ? "copy" : String(describing: type(of: hit))
+        }
+        func event(_ type: NSEvent.EventType) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [],
+                               timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: panel.windowNumber, context: nil,
+                               eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)
+        }
+        guard let down = event(.leftMouseDown), let up = event(.leftMouseUp) else { return (hitName, "none") }
+        if viaWindow {
+            panel.sendEvent(down)
+            panel.sendEvent(up)
+            return (hitName, "window")
+        }
+        content.copyControl.mouseDown(with: down)
+        content.copyControl.mouseUp(with: up)
+        return (hitName, "direct")
+    }
+
+    func discardTimersForTest() { cancelTimers() }
 }
 
 /// Off screen rendering of the pop-up, for the command line check.
 public enum UploadPanelPreview {
+    /// Clicks Copy the way a mouse would, without a window on screen and
+    /// without touching the real clipboard. Returns one line with what was seen.
+    @MainActor
+    @_spi(Harness)
+    public static func simulateCopyClick() -> String {
+        let link = URL(string: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view")!
+        let board = NSPasteboard(name: NSPasteboard.Name("we-screenshot-click-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        func attempt(viaWindow: Bool) -> String {
+            let controller = UploadPanelController(pasteboard: board)
+            controller.prepareDoneForTest(link: link)
+            board.clearContents()
+            let result = controller.clickCopy(viaWindow: viaWindow)
+            let action = controller.copyCount > 0 ? "yes" : "no"
+            let pasteboardOK = board.string(forType: .string) == link.absoluteString ? "ok" : "bad"
+            let line = "copy click: action=\(action) title=\(controller.copyTitleText) pasteboard=\(pasteboardOK) "
+                + "panelTitle=\(controller.titleText) delivery=\(result.delivery) hit=\(result.hit)"
+            controller.discardTimersForTest()
+            return line
+        }
+        let viaWindow = attempt(viaWindow: true)
+        if viaWindow.contains("action=yes") { return viaWindow }
+        return attempt(viaWindow: false)
+    }
+
     /// Renders one state at 2x without creating a window. The result is a PNG.
     @MainActor
     @_spi(Harness)

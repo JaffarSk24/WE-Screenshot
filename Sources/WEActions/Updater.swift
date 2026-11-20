@@ -2,7 +2,7 @@ import AppKit
 import Security
 import WECore
 
-/// Self-update from GitHub Releases: checks once a day, asks, downloads the
+/// Self-update from GitHub Releases: checks soon after start and then every hour, asks, downloads the
 /// zip, verifies that the new app is signed by the same certificate as this
 /// one, replaces this bundle in place and relaunches. Settings, the login item
 /// and the macOS permissions stay: they belong to the bundle identifier, path
@@ -17,6 +17,19 @@ public final class Updater {
     private let releasesPage = URL(string: "https://github.com/\(Updater.repository)/releases/latest")!
     private let settings: SettingsStore
     private var timer: Timer?
+    /// The check that matters runs right after launch. This daily repeat is
+    /// only for an app that stays open for weeks without a restart.
+    private static let checkInterval: TimeInterval = 24 * 3600
+    /// One more try when the launch check fails, typically because the app
+    /// starts at login before the network is up.
+    private static let retryDelay: TimeInterval = 120
+    private var retriedGeneration = -1
+    /// After "Later" the same version is not offered again automatically for this long.
+    private static let laterSnooze: TimeInterval = 24 * 3600
+    private var etag: String?
+    private var knownRelease: ReleaseInfo?
+    private var laterVersion: String?
+    private var laterUntil: Date?
     /// Bumped by every start(): a delayed check from an older start is ignored.
     private var generation = 0
     /// Bumped by every start() and every check(): a postponed alert from an
@@ -42,7 +55,7 @@ public final class Updater {
     }
 
     /// Starts (or restarts, after the setting changed) the automatic checks:
-    /// a minute after start, then every 24 hours, when the setting is on.
+    /// 15 seconds after start and then once a day, when the setting is on.
     public func start() {
         timer?.invalidate()
         timer = nil
@@ -50,24 +63,36 @@ public final class Updater {
         checkEpoch += 1
         guard settings.autoCheckUpdates else { return }
         let started = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == started else { return }
                 await self.check(userInitiated: false)
             }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in await self?.check(userInitiated: false) }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == started else { return }
+                await self.check(userInitiated: false)
+            }
         }
     }
 
+    /// The newest release, or the one already known when GitHub answers 304.
     private func fetchLatest() async throws -> ReleaseInfo? {
         var req = URLRequest(url: releasesAPI, timeoutInterval: 20)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("WE-Screenshot/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+        if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return ReleaseInfo.parse(githubJSON: data)
+        let http = response as? HTTPURLResponse
+        if http?.statusCode == 304 { return knownRelease }
+        guard http?.statusCode == 200 else { return nil }
+        let release = ReleaseInfo.parse(githubJSON: data)
+        if release != nil {
+            etag = http?.value(forHTTPHeaderField: "ETag")
+            knownRelease = release
+        }
+        return release
     }
 
     /// Checks now. With userInitiated the result is always shown, including
@@ -82,7 +107,19 @@ public final class Updater {
         do {
             release = try await fetchLatest()
         } catch {
-            if userInitiated { inform(L("Could not check for updates."), error.localizedDescription) }
+            if userInitiated {
+                inform(L("Could not check for updates."), error.localizedDescription)
+            } else if retriedGeneration != generation {
+                // Once per start: the network may simply not be up yet.
+                retriedGeneration = generation
+                let started = generation
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelay) { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.generation == started, self.settings.autoCheckUpdates else { return }
+                        await self.check(userInitiated: false)
+                    }
+                }
+            }
             return
         }
         guard let release, Versions.isNewer(release.version, than: Self.currentVersion) else {
@@ -93,6 +130,7 @@ public final class Updater {
             return
         }
         if !userInitiated && settings.skippedVersion == release.version { return }
+        if !userInitiated, laterVersion == release.version, let until = laterUntil, Date() < until { return }
         if !userInitiated && !canPresentNow() {
             postpone(release, epoch: epoch)
             return
@@ -138,7 +176,8 @@ public final class Updater {
         case .alertThirdButtonReturn:
             settings.skippedVersion = release.version
         default:
-            break
+            laterVersion = release.version
+            laterUntil = Date().addingTimeInterval(Self.laterSnooze)
         }
     }
 
