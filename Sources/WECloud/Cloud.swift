@@ -150,35 +150,6 @@ public protocol TokenStore: Sendable {
     func clear() throws
 }
 
-/// Tokens in the login keychain, as one generic password item.
-public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
-    private let keychain: KeychainStore
-    private let account: String
-
-    public init(keychain: KeychainStore = KeychainStore(), account: String = "oauth-tokens") {
-        self.keychain = keychain
-        self.account = account
-    }
-
-    public func load() throws -> OAuthTokens? {
-        guard let json = try keychain.string(for: account), let data = json.data(using: .utf8) else {
-            return nil
-        }
-        // An unreadable item (an older or damaged format) means "signed out":
-        // the user signs in again instead of being stuck with an error.
-        return try? TokenCoding.decoder.decode(OAuthTokens.self, from: data)
-    }
-
-    public func save(_ tokens: OAuthTokens) throws {
-        let data = try TokenCoding.encoder.encode(tokens)
-        try keychain.set(String(decoding: data, as: UTF8.self), for: account)
-    }
-
-    public func clear() throws {
-        try keychain.set(nil, for: account)
-    }
-}
-
 /// Tokens in memory, for tests.
 public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     private let lock = NSLock()

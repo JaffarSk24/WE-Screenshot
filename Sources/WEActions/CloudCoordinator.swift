@@ -8,7 +8,7 @@ import WECore
 public final class CloudCoordinator {
     private let settings: SettingsStore
     private let notifier: Notifier
-    private let keychain = KeychainStore()
+    private let secretStore = LocalSecretStore.shared
     private static let secretAccount = "client-secret"
 
     private struct Stack {
@@ -19,7 +19,7 @@ public final class CloudCoordinator {
     }
 
     private var stack: Stack?
-    /// nil outer value: not read from the keychain yet.
+    /// nil outer value: not read from the file yet.
     private var secretCache: String??
     /// The running Google sign-in (the browser is open), if any.
     private var signInTask: Task<Result<OAuthTokens, Error>, Never>?
@@ -32,6 +32,14 @@ public final class CloudCoordinator {
     public init(settings: SettingsStore, notifier: Notifier) {
         self.settings = settings
         self.notifier = notifier
+        // Tokens are gone (for example after the move away from the old
+        // storage): do not keep showing an account that is not signed in.
+        if settings.googleAccountLabel != nil {
+            // Only a definite "no tokens" clears it, not a read error.
+            do {
+                if try FileTokenStore().load() == nil { settings.googleAccountLabel = nil }
+            } catch {}
+        }
     }
 
     /// Called on the main thread whenever sign-in state or activity changes.
@@ -65,14 +73,24 @@ public final class CloudCoordinator {
     }
 
     /// The client used for sign-in and uploads: the user's own, else the built-in one.
-    private var effectiveClient: (id: String, secret: String)? { ownClient ?? Self.builtInClient }
+    private var effectiveClient: (id: String, secret: String)? {
+        // An own client whose secret is missing is asked for again in Settings;
+        // switching to the built-in client behind the user's back is not an option.
+        ownClientNeedsSecret ? nil : (ownClient ?? Self.builtInClient)
+    }
 
-    /// The stored client secret (kept in the keychain); nil when not set.
+    /// True when the user chose their own client but its secret is not stored
+    /// (it is asked for once more after the move out of the keychain).
+    public var ownClientNeedsSecret: Bool {
+        ActionRules.normalized(settings.googleClientID) != nil && clientSecret == nil
+    }
+
+    /// The stored client secret (kept in a private file); nil when not set.
     public var clientSecret: String? {
         if let cached = secretCache { return cached }
         // Only a definite answer is cached (a secret or "no item"); on an
         // error the next access tries again.
-        guard let stored = try? keychain.string(for: Self.secretAccount) else {
+        guard let stored = try? secretStore.string(for: Self.secretAccount) else {
             return nil
         }
         let value = ActionRules.normalized(stored)
@@ -81,7 +99,7 @@ public final class CloudCoordinator {
     }
 
     /// Stores the user's own OAuth client: the ID in the settings, the secret in
-    /// the keychain. Empty values remove it, which switches back to the built-in
+    /// a private file. Empty values remove it, which switches back to the built-in
     /// client. A change of the client in use signs the user out.
     public func setClient(id: String?, secret: String?) {
         let newID = ActionRules.normalized(id)
@@ -92,9 +110,9 @@ public final class CloudCoordinator {
         let oldEffective = effectiveClient
         // The secret goes first, while a failure still changes nothing else.
         do {
-            try keychain.set(newSecret, for: Self.secretAccount)
+            try secretStore.set(newSecret, for: Self.secretAccount)
         } catch {
-            Alerts.inform(L("The client secret could not be saved to the keychain."), error.localizedDescription)
+            Alerts.inform(L("The client secret could not be saved."), error.localizedDescription)
             return
         }
         settings.googleClientID = newID
@@ -105,7 +123,7 @@ public final class CloudCoordinator {
             authEpoch += 1
             cancelSignIn()
             // Tokens belong to the old client: forget them.
-            try? KeychainTokenStore().clear()
+            try? FileTokenStore().clear()
             settings.googleAccountLabel = nil
             settings.driveFolderID = nil
             stack = nil
@@ -148,7 +166,7 @@ public final class CloudCoordinator {
         if let stack, stack.clientID == id, stack.secret == secret { return stack }
         let transport = URLSessionTransport()
         let authorizer = GoogleAuthorizer(config: .google(clientID: id, clientSecret: secret),
-                                          transport: transport, store: KeychainTokenStore(),
+                                          transport: transport, store: FileTokenStore(),
                                           openURL: { NSWorkspace.shared.open($0) })
         let settings = self.settings
         let uploader = GoogleDriveUploader(tokens: authorizer, transport: transport,
@@ -178,7 +196,7 @@ public final class CloudCoordinator {
         defer { endBusy(token) }
         await currentStack()?.authorizer.signOut()
         // Also covers the case without a client: nothing stays behind.
-        try? KeychainTokenStore().clear()
+        try? FileTokenStore().clear()
         settings.googleAccountLabel = nil
         settings.driveFolderID = nil
         onStateChange?()
@@ -231,7 +249,7 @@ public final class CloudCoordinator {
         // attempt stored belongs to a client that is no longer in use.
         if epoch != authEpoch {
             if signInTask == nil {
-                try? KeychainTokenStore().clear()
+                try? FileTokenStore().clear()
                 settings.googleAccountLabel = nil
             }
             return false

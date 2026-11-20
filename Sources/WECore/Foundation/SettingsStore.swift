@@ -105,7 +105,7 @@ public final class SettingsStore: @unchecked Sendable {
 
     /// Client ID of the user's own Google OAuth client (type "Desktop app"),
     /// typed in Settings. The app ships without one. The matching client
-    /// secret is kept in the keychain, not here.
+    /// secret is kept in a private file of the app, not here.
     public var googleClientID: String? {
         get { nonEmpty(defaults.string(forKey: "googleClientID")) }
         set { defaults.set(newValue, forKey: "googleClientID"); changed() }

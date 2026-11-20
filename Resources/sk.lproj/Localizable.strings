@@ -1,4 +1,4 @@
-"The client secret could not be saved to the keychain." = "Tajný kľúč klienta sa nepodarilo uložiť do Kľúčenky.";
+"The client secret could not be saved." = "Tajný kľúč klienta sa nepodarilo uložiť.";
 "Google sign-in did not work." = "Prihlásenie do Google zlyhalo.";
 "Google Drive is not set up yet." = "Google Drive ešte nie je nastavený.";
 "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "V tomto zostavení nie je nastavené prihlásenie do Google. Klienta Google OAuth môžete zadať v Nastaveniach.";

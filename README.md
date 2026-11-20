@@ -81,7 +81,7 @@ If Personal mode is not available (for example a Google Workspace account), use 
 
 What the app asks for: only the `drive.file` scope, which lets the app see only the files it created itself, not the rest of your Drive. Sign in uses your system browser with a loopback address and PKCE.
 
-Where things are stored: the client secret and the sign in tokens live in the macOS keychain, the client ID in the app's preferences. Do not add the ID or the secret to a repository or send them in chats.
+Where things are stored: the client secret and the sign in tokens live in a private folder of the app, `~/Library/Application Support/WE Screenshot`, readable only by your user account, and the client ID in the app's preferences. They are not in the keychain because macOS binds keychain items of apps without an Apple developer ID to the exact build, which would ask for the keychain password after every update. Do not add the ID or the secret to a repository or send them in chats.
 
 An uploaded screenshot is shared with the setting "anyone with the link can view", so anyone who has the link can see it. To stop using Drive, choose Sign Out of Google Drive in the menu or in Settings; the app forgets the tokens. Files already uploaded stay in your Drive and you can delete them there.
 
@@ -90,7 +90,7 @@ An uploaded screenshot is shared with the setting "anyone with the link can view
 ## Data and settings
 
 - Settings: the `sk.whiteeagles.screenshot` preferences domain (shortcut, image format, Retina option, update options, Google client ID and so on).
-- Google client secret and tokens: the macOS keychain, service `sk.whiteeagles.screenshot.google`.
+- Google client secret and tokens: the private folder `~/Library/Application Support/WE Screenshot` (files `client-secret.secret` and `oauth-tokens.secret`, mode 0600, readable only by your user account).
 - Google Drive: a folder named "WE Screenshot", created on the first upload, holds the uploaded pictures.
 
 The app writes nothing else. It makes no analytics calls. Network use is limited to Google sign in and uploads, which you start yourself, and the daily check for updates, which reads the latest release from the GitHub API and downloads a new version only when you accept it. The check can be switched off in Settings or in the menu.
@@ -140,7 +140,7 @@ The updater compares the tag with the installed version, looks for that exact at
 
 - `Sources/WECore`: pure logic: settings, shortcut model, selection geometry, file naming, versions.
 - `Sources/WEAnnotate`: annotation model, rendering, image composition and encoding.
-- `Sources/WECloud`: Google sign in (OAuth for desktop apps) and Google Drive upload, keychain storage.
+- `Sources/WECloud`: Google sign in (OAuth for desktop apps) and Google Drive upload, token storage.
 - `Sources/WECapture`: screen capture with ScreenCaptureKit and the Screen Recording permission.
 - `Sources/WEOverlay`: the selection screen: windows, selection, panels, drawing tools.
 - `Sources/WEActions`: copy, save, print, upload, search, notifications and the updater.

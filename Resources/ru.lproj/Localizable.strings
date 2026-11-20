@@ -1,4 +1,4 @@
-"The client secret could not be saved to the keychain." = "Не удалось сохранить секрет клиента в Связке ключей.";
+"The client secret could not be saved." = "Не удалось сохранить секрет клиента.";
 "Google sign-in did not work." = "Не удалось войти через Google.";
 "Google Drive is not set up yet." = "Google Drive ещё не настроен.";
 "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "В этой сборке вход в Google не настроен. Клиент Google OAuth можно указать в настройках.";

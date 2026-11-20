@@ -187,7 +187,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             // Opened fresh: show what is stored.
             clientIDDirty = false
             clientSecretDirty = false
-            ownClientExpanded = cloud.usesOwnClient
+            ownClientExpanded = cloud.usesOwnClient || cloud.ownClientNeedsSecret
         }
         refresh()
         if !window.isVisible { window.center() }
@@ -202,7 +202,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         recorder.stopRecording()
         clientIDDirty = false
         clientSecretDirty = false
-        ownClientExpanded = cloud.usesOwnClient
+        ownClientExpanded = cloud.usesOwnClient || cloud.ownClientNeedsSecret
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -376,7 +376,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         openLinkCheck.state = settings.openLinkAfterUpload ? .on : .off
         loginCheck.state = SMAppService.mainApp.status == .enabled ? .on : .off
         updatesCheck.state = settings.autoCheckUpdates ? .on : .off
-        if cloud.usesOwnClient { ownClientExpanded = true }
+        if cloud.usesOwnClient || cloud.ownClientNeedsSecret { ownClientExpanded = true }
         ownClientCheck.state = ownClientExpanded ? .on : .off
         applyFieldsVisibility(resize: true)
         if !clientIDDirty && !isEditing(clientIDField) { clientIDField.stringValue = settings.googleClientID ?? "" }
@@ -422,6 +422,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
         guard cloud.usesOwnClient else {
             ownClientExpanded = false
+            // A client ID left without its secret would keep blocking the
+            // built-in client, so it is dropped together with the choice.
+            if cloud.ownClientNeedsSecret { cloud.setClient(id: nil, secret: nil) }
             clientIDDirty = false
             clientSecretDirty = false
             clientIDField.stringValue = ""

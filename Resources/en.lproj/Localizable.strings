@@ -1,4 +1,4 @@
-"The client secret could not be saved to the keychain." = "The client secret could not be saved to the keychain.";
+"The client secret could not be saved." = "The client secret could not be saved.";
 "Google sign-in did not work." = "Google sign-in did not work.";
 "Google Drive is not set up yet." = "Google Drive is not set up yet.";
 "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings.";
