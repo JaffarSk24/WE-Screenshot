@@ -98,11 +98,20 @@ public enum AnnotationRenderer {
         let baseX = to.x - ux * headLength, baseY = to.y - uy * headLength
         // The shaft stops inside the head so its round cap cannot poke out of the tip.
         let shaftEnd = CGPoint(x: to.x - ux * headLength * 0.7, y: to.y - uy * headLength * 0.7)
+        // Shaft and head overlap, so a translucent colour is painted once into a
+        // transparency layer at full alpha and the layer is composited at the colour alpha.
+        let alpha = color.alpha
+        let translucent = alpha < 1
+        let solid = translucent ? (color.copy(alpha: 1) ?? color) : color
+        if translucent {
+            ctx.setAlpha(alpha)
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
         if hypot(shaftEnd.x - from.x, shaftEnd.y - from.y) > 0.01 {
             let shaft = CGMutablePath()
             shaft.move(to: from)
             shaft.addLine(to: shaftEnd)
-            stroke(path: shaft, color: color, width: width, cap: .round, join: .round, in: ctx)
+            stroke(path: shaft, color: solid, width: width, cap: .round, join: .round, in: ctx)
         }
         let nx = -uy, ny = ux
         let head = CGMutablePath()
@@ -110,9 +119,10 @@ public enum AnnotationRenderer {
         head.addLine(to: CGPoint(x: baseX + nx * headWidth / 2, y: baseY + ny * headWidth / 2))
         head.addLine(to: CGPoint(x: baseX - nx * headWidth / 2, y: baseY - ny * headWidth / 2))
         head.closeSubpath()
-        ctx.setFillColor(color)
+        ctx.setFillColor(solid)
         ctx.addPath(head)
         ctx.fillPath()
+        if translucent { ctx.endTransparencyLayer() }
     }
 
     // MARK: Text
@@ -141,6 +151,10 @@ public enum AnnotationRenderer {
         let font = makeFont(size: fontSize)
         let ascent = CTFontGetAscent(font)
         let height = lineHeight(of: font)
+        // The text matrix (and text position) is not part of the graphics state,
+        // so put it back for the caller.
+        let savedMatrix = ctx.textMatrix
+        defer { ctx.textMatrix = savedMatrix }
         // Flip locally: the context is y down, glyphs are y up.
         ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         for (index, line) in text.components(separatedBy: "\n").enumerated() where !line.isEmpty {

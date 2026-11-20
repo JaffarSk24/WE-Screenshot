@@ -1,2 +1,25 @@
-// PLACEHOLDER: replaced by the overlay harness.
-print("weshot-harness: not implemented yet")
+import AppKit
+
+// Developer tool: renders the overlay off screen into PNG files and checks a
+// few rules on the way. Nothing is shown on screen and no permission is
+// needed. Usage: weshot-harness <output folder>
+
+let arguments = CommandLine.arguments
+guard arguments.count == 2 else {
+    FileHandle.standardError.write("usage: weshot-harness <output folder>\n".data(using: .utf8)!)
+    exit(2)
+}
+outputFolder = URL(fileURLWithPath: arguments[1], isDirectory: true)
+try? FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
+
+_ = NSApplication.shared
+NSApp.setActivationPolicy(.prohibited)
+
+Task { @MainActor in
+    runMain(width: 1440, height: 900, scale: 2, prefix: "", full: true)
+    runMain(width: 800, height: 600, scale: 1, prefix: "narrow-", full: false)
+    runLogicChecks()
+    print(failures == 0 ? "all checks passed" : "\(failures) checks failed")
+    exit(failures == 0 ? 0 : 1)
+}
+RunLoop.main.run()

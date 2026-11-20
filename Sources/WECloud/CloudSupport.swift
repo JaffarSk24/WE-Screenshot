@@ -165,3 +165,11 @@ func networkError(_ error: Error) -> CloudError {
     if let cloud = error as? CloudError { return cloud }
     return .network(error.localizedDescription)
 }
+
+/// The error to rethrow for a failed request: a cancelled request stays a
+/// cancellation (so callers can stay silent), anything else is a CloudError.
+func transportError(_ error: Error) -> Error {
+    if error is CancellationError { return error }
+    if let urlError = error as? URLError, urlError.code == .cancelled { return CancellationError() }
+    return networkError(error)
+}

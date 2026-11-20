@@ -1,4 +1,5 @@
 import XCTest
+import CoreText
 import WECore
 import WEAnnotate
 
@@ -43,6 +44,38 @@ final class RendererTests: XCTestCase {
         XCTAssertTrue(g.isRed(54, 50))
         XCTAssertTrue(g.isWhite(60, 50))
         XCTAssertTrue(g.isWhite(40, 50))
+        // An unshrunk head (13.5 pt) would reach back to x = 42.5 behind the start point.
+        XCTAssertTrue(g.isWhite(47, 50), "head must not stick out behind the start")
+        XCTAssertTrue(g.isWhite(46, 53), "head base must not be wider than the arrow is long")
+        XCTAssertTrue(g.isWhite(48, 56))
+        XCTAssertTrue(g.isWhite(48, 44))
+    }
+
+    func testTranslucentArrowDoesNotDarkenWhereShaftMeetsHead() {
+        let color = RGBAColor(red: 1, green: 0, blue: 0, alpha: 0.5)
+        let a = Annotation(shape: .arrow(from: CGPoint(x: 10, y: 50.5), to: CGPoint(x: 80, y: 50.5)),
+                           color: color, lineWidth: 3)
+        let g = render([a])
+        // Head spans x 66.5...80, the shaft ends 0.7 * 13.5 = 9.45 inside it. Column 68 has
+        // rows 49...51 over the shaft and rows 46...48 over the head only.
+        let headOnly = g.pixel(68, 47)
+        let overShaft = g.pixel(68, 50)
+        XCTAssertTrue(headOnly.g > 100 && headOnly.g < 160, "blended, got \(headOnly)")
+        XCTAssertTrue(abs(headOnly.g - overShaft.g) <= 3, "overlap must not darken: \(overShaft) vs \(headOnly)")
+        let shaftOnly = g.pixel(40, 50)
+        XCTAssertTrue(abs(headOnly.g - shaftOnly.g) <= 3, "shaft must blend like the head: \(shaftOnly) vs \(headOnly)")
+    }
+
+    func testRendererLeavesTextMatrixAlone() {
+        let ctx = makeContext(width: 100, height: 100)
+        ctx.textMatrix = .identity
+        let a = Annotation(shape: .text("Hi", origin: CGPoint(x: 10, y: 10), fontSize: 20), color: .red, lineWidth: 0)
+        AnnotationRenderer.draw([a], in: ctx)
+        XCTAssertEqual(ctx.textMatrix, .identity)
+        let custom = CGAffineTransform(a: 2, b: 0, c: 0, d: 3, tx: 5, ty: 7)
+        ctx.textMatrix = custom
+        AnnotationRenderer.draw([a], in: ctx)
+        XCTAssertEqual(ctx.textMatrix, custom)
     }
 
     func testMarkerBlendsAndDoesNotDarkenOverlap() {
@@ -66,23 +99,25 @@ final class RendererTests: XCTestCase {
         XCTAssertGreaterThan(size.width, 10)
         XCTAssertGreaterThan(size.height, 30)
         let g = render([a], width: 120, height: 120)
-        var above = 0, inside = 0, upper = 0, lower = 0
-        let boxBottom = Int(origin.y + size.height)
-        let mid = Int(origin.y + size.height / 2)
+        let font = CTFontCreateWithName(AnnotationStyle.textFontName as CFString, 40, nil)
+        let baseline = Int((origin.y + CTFontGetAscent(font)).rounded())
+        let capHeight = Int(CTFontGetCapHeight(font).rounded())
+        var above = 0, belowBaseline = 0, nearCapTop = 0, nearBaseline = 0
         for y in 0..<120 {
             for x in 0..<120 where !g.isWhite(x, y) {
                 if y < Int(origin.y) { above += 1 }
-                if y >= Int(origin.y), y <= boxBottom, x >= Int(origin.x) - 1, x <= Int(origin.x + size.width) + 1 {
-                    inside += 1
-                    if y < mid { upper += 1 } else { lower += 1 }
-                }
+                if y > baseline + 1 { belowBaseline += 1 }
+                if y >= baseline - capHeight && y <= baseline - capHeight + 3 { nearCapTop += 1 }
+                if y >= baseline - 3 && y <= baseline { nearBaseline += 1 }
             }
         }
         XCTAssertEqual(above, 0)
-        XCTAssertGreaterThan(inside, 50)
-        // An upright "L" has its vertical stem over the whole height and the foot at the bottom,
-        // so the lower half carries more ink than the upper half; upside down it is the opposite.
-        XCTAssertGreaterThan(lower, upper)
+        // Upright: the ink sits between baseline - capHeight and the baseline, with the foot
+        // of the L (wide) at the baseline and only the stem at the top. Mirrored glyphs hang
+        // below the baseline instead.
+        XCTAssertLessThan(belowBaseline, 5, "ink below the baseline means the text is upside down")
+        XCTAssertGreaterThan(nearBaseline, 40, "the foot of the L lies on the baseline")
+        XCTAssertGreaterThan(nearBaseline, nearCapTop, "the foot is wider than the stem")
     }
 
     func testTextSizeMultiLine() {
@@ -94,13 +129,25 @@ final class RendererTests: XCTestCase {
     }
 
     func testMultiLineTextDrawsSecondLineBelow() {
-        let a = Annotation(shape: .text("T\nT", origin: CGPoint(x: 10, y: 10), fontSize: 20), color: .red, lineWidth: 0)
-        let size = AnnotationRenderer.textSize("T\nT", fontSize: 20)
+        let origin = CGPoint(x: 10, y: 10)
+        let a = Annotation(shape: .text("T\nT", origin: origin, fontSize: 20), color: .red, lineWidth: 0)
         let g = render([a], width: 80, height: 100)
-        var lowerHalfInk = 0
-        for y in Int(10 + size.height / 2 + 2)..<Int(10 + size.height) {
-            for x in 0..<80 where !g.isWhite(x, y) { lowerHalfInk += 1 }
+        let font = CTFontCreateWithName(AnnotationStyle.textFontName as CFString, 20, nil)
+        let ascent = CTFontGetAscent(font)
+        let lineHeight = ascent + CTFontGetDescent(font) + CTFontGetLeading(font)
+        // Each upright T sits between baseline - capHeight and its baseline; the second line is one line height lower.
+        func ink(_ from: CGFloat, _ to: CGFloat) -> Int {
+            var n = 0
+            for y in Int(from.rounded())..<Int(to.rounded()) {
+                for x in 0..<80 where !g.isWhite(x, y) { n += 1 }
+            }
+            return n
         }
-        XCTAssertGreaterThan(lowerHalfInk, 10)
+        let cap = CTFontGetCapHeight(font)
+        let base1 = origin.y + ascent, base2 = base1 + lineHeight
+        XCTAssertGreaterThan(ink(base1 - cap + 1, base1 - 1), 20, "first line")
+        XCTAssertGreaterThan(ink(base2 - cap + 1, base2 - 1), 20, "second line")
+        XCTAssertEqual(ink(base1 + 2, base2 - cap - 1), 0, "gap between the lines")
+        XCTAssertEqual(ink(base2 + 2, 100), 0, "nothing below the second baseline")
     }
 }

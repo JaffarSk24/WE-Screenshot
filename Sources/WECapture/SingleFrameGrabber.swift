@@ -74,7 +74,10 @@ final class SingleFrameGrabber: NSObject, SCStreamOutput, SCStreamDelegate {
             let rawStatus = first[.status] as? Int,
             let status = SCFrameStatus(rawValue: rawStatus)
         else { return false }
-        return status == .complete
+        // The first frame after the stream starts may be tagged .started and
+        // still carry the picture; on a screen where nothing moves it can be
+        // the only frame with pixels.
+        return (status == .complete || status == .started) && CMSampleBufferGetImageBuffer(sampleBuffer) != nil
     }
 
     private func finish(_ result: Result<CGImage, Error>) {

@@ -58,6 +58,26 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(near(PixelGrid(image).pixel(5, 5), 255, 255, 0))
     }
 
+    func testTextIsUprightInComposedImage() throws {
+        // Scale 2, selection inside the blue quadrant. White "L" at (20, 55) pt: stem on the left, foot along the bottom.
+        let white = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let a = Annotation(shape: .text("L", origin: CGPoint(x: 20, y: 55), fontSize: 30), color: white, lineWidth: 0)
+        let image = try ImageComposer.compose(snapshot: snapshot(), selection: CGRect(x: 10, y: 50, width: 80, height: 50),
+                                              annotations: [a])
+        let g = PixelGrid(image)
+        var rows: [Int] = []
+        for y in 0..<g.height {
+            var n = 0
+            for x in 0..<g.width where g.pixel(x, y).r > 200 { n += 1 }
+            rows.append(n)
+        }
+        guard let first = rows.firstIndex(where: { $0 > 0 }), let last = rows.lastIndex(where: { $0 > 0 }) else {
+            return XCTFail("no text ink")
+        }
+        // Upright: the foot is a wide run of ink in the bottom rows, the top rows hold only the stem.
+        XCTAssertGreaterThan(rows[last - 2], rows[first + 2] * 2, "text looks upside down")
+    }
+
     func testEmptySelectionThrows() {
         for rect in [CGRect.zero, CGRect(x: 10, y: 10, width: 0, height: 20), CGRect(x: CGFloat.nan, y: 0, width: 5, height: 5),
                      CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 5)] {
@@ -133,5 +153,54 @@ final class EncoderTests: XCTestCase {
         let source = try XCTUnwrap(CGImageSourceCreateWithData(low as CFData, nil))
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(decoded.width, image.width)
+    }
+
+    /// A dark horizontal ramp as a 16 bit image in the given space (value written in that space).
+    private func rampImage(space: CGColorSpace, bitsPerComponent: Int = 16, columns: Int = 64) -> CGImage {
+        var data = [UInt16](repeating: 0, count: columns * 4)
+        for x in 0..<columns {
+            let v = UInt16(Double(x) / Double(columns - 1) * 0.02 * 65535)
+            data[x * 4] = v; data[x * 4 + 1] = v; data[x * 4 + 2] = v; data[x * 4 + 3] = 65535
+        }
+        let bytes = data.withUnsafeBufferPointer { Data(buffer: $0) }
+        let provider = CGDataProvider(data: bytes as CFData)!
+        return CGImage(width: columns, height: 1, bitsPerComponent: bitsPerComponent, bitsPerPixel: bitsPerComponent * 4,
+                       bytesPerRow: columns * 8, space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                                                | CGBitmapInfo.byteOrder16Little.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }
+
+    private func distinctLevels(_ image: CGImage) -> Int {
+        let g = PixelGrid(image)
+        return Set((0..<g.width).map { g.pixel($0, 0).g }).count
+    }
+
+    func testLinear16BitSnapshotKeepsDarkLevels() throws {
+        let linear = CGColorSpace(name: CGColorSpace.linearSRGB)!
+        let src = rampImage(space: linear)
+        let info = DisplayInfo(id: 1, frame: CGRect(x: 0, y: 0, width: 64, height: 1), scale: 1)
+        let composed = try ImageComposer.compose(snapshot: DisplaySnapshot(display: info, image: src),
+                                                 selection: CGRect(x: 0, y: 0, width: 64, height: 1), annotations: [])
+        let name = composed.colorSpace?.name as String?
+        XCTAssertNotEqual(name, CGColorSpace.linearSRGB as String, "must not compose into an 8 bit linear space")
+        XCTAssertGreaterThan(distinctLevels(composed), 20, "dark ramp must not band")
+        let scaled = try ImageComposer.downscaled(src, fromScale: 2)
+        XCTAssertNotEqual(scaled.colorSpace?.name as String?, CGColorSpace.linearSRGB as String)
+    }
+
+    func testHighBitDepthGammaSnapshotFallsBackToGammaSpace() throws {
+        let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
+        let src = rampImage(space: p3)
+        let info = DisplayInfo(id: 1, frame: CGRect(x: 0, y: 0, width: 64, height: 1), scale: 1)
+        let composed = try ImageComposer.compose(snapshot: DisplaySnapshot(display: info, image: src),
+                                                 selection: CGRect(x: 0, y: 0, width: 64, height: 1), annotations: [])
+        XCTAssertEqual(composed.colorSpace?.name as String?, CGColorSpace.displayP3 as String)
+    }
+
+    func testEightBitSRGBSnapshotKeepsItsSpace() throws {
+        let composed = try ImageComposer.compose(snapshot: snapshot(), selection: CGRect(x: 0, y: 0, width: 20, height: 20),
+                                                 annotations: [])
+        XCTAssertEqual(composed.colorSpace?.name as String?, CGColorSpace.sRGB as String)
     }
 }

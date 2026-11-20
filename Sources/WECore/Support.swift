@@ -38,8 +38,9 @@ public extension KeyCombo {
         return text
     }
 
-    /// A shortcut is acceptable as a global hotkey when it has Command, Control
-    /// or Option (Shift alone is not enough), or when the key is a function key.
+    /// A shortcut is acceptable as a global hotkey when it has Command or
+    /// Control, or when the key is a function key. Option and Shift alone are
+    /// not enough.
     var isValidGlobalHotKey: Bool {
         if functionKeyCodes[keyCode] != nil { return true }
         if modifiers.contains(.command) || modifiers.contains(.control) { return true }
@@ -157,7 +158,8 @@ public struct ReleaseInfo: Equatable, Sendable {
                 line = String(line.dropFirst(2))
             }
             line = stripInlineMarks(line).trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("SHA-256") || line.hasPrefix("Install") { break }
+            // Bullets are changelog entries, so only plain lines can end the notes.
+            if !bullet, isTrailerLine(line) { break }
             lines.append(bullet ? "\u{2022} " + line : line)
         }
         var result: [String] = []
@@ -172,16 +174,32 @@ public struct ReleaseInfo: Equatable, Sendable {
         return text
     }
 
+    /// "SHA-256..." or the word Install/Installation ("Installer is smaller" is not one).
+    private static func isTrailerLine(_ line: String) -> Bool {
+        if line.hasPrefix("SHA-256") { return true }
+        for word in ["Installation", "Install"] where line.hasPrefix(word) {
+            let rest = line.dropFirst(word.count)
+            if rest.first.map({ !$0.isLetter && !$0.isNumber }) ?? true { return true }
+        }
+        return false
+    }
+
+    private static func replacing(_ pattern: String, in text: String, with template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
+                                              withTemplate: template)
+    }
+
     private static func stripInlineMarks(_ text: String) -> String {
-        var result = text
-        // [label](url) keeps the label only.
-        if let regex = try? NSRegularExpression(pattern: "\\[([^\\]]*)\\]\\([^)]*\\)") {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result),
-                                                    withTemplate: "$1")
-        }
-        for mark in ["**", "__", "`"] {
-            result = result.replacingOccurrences(of: mark, with: "")
-        }
+        // Images keep the alt text, links keep the label.
+        var result = replacing("!\\[([^\\]]*)\\]\\([^)]*\\)", in: text, with: "$1")
+        result = replacing("\\[([^\\]]*)\\]\\([^)]*\\)", in: result, with: "$1")
+        // Emphasis only at word boundaries, so snake_case and 2*3*4 survive.
+        result = replacing("(?<![\\w*])\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*(?![\\w*])", in: result, with: "$1")
+        result = replacing("(?<![\\w_])__(?=\\S)(.+?)(?<=\\S)__(?![\\w_])", in: result, with: "$1")
+        result = replacing("(?<![\\w*])\\*(?=\\S)(.+?)(?<=\\S)\\*(?![\\w*])", in: result, with: "$1")
+        result = replacing("(?<![\\w_])_(?=\\S)(.+?)(?<=\\S)_(?![\\w_])", in: result, with: "$1")
+        result = result.replacingOccurrences(of: "`", with: "")
         return result
     }
 }

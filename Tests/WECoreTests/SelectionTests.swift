@@ -132,12 +132,57 @@ final class SelectionTests: XCTestCase {
         m.beginCreate(at: CGPoint(x: 10.4, y: 20.6))
         m.drag(to: CGPoint(x: 110.2, y: 90.9))
         m.endDrag()
-        let r = m.rect!
-        XCTAssertEqual(r.minX, r.minX.rounded())
-        XCTAssertEqual(r.minY, r.minY.rounded())
-        XCTAssertEqual(r.width, r.width.rounded())
-        XCTAssertEqual(r.height, r.height.rounded())
-        XCTAssertTrue(bounds.contains(r))
+        // Edges are rounded, not origin and size separately.
+        XCTAssertEqual(m.rect, CGRect(x: 10, y: 21, width: 100, height: 70))
+    }
+
+    func testEndDragKeepsFarEdgeOnRoundedPlacement() {
+        XCTAssertEqual(create(from: CGPoint(x: 100.5, y: 100.5), to: CGPoint(x: 200, y: 200)),
+                       CGRect(x: 101, y: 101, width: 99, height: 99))
+        XCTAssertEqual(create(from: CGPoint(x: 10.4, y: 10.4), to: CGPoint(x: 20.6, y: 20.6)),
+                       CGRect(x: 10, y: 10, width: 11, height: 11))
+    }
+
+    func testResizeKeepsGrabOffset() {
+        var m = model(CGRect(x: 100, y: 100, width: 200, height: 200))
+        m.beginResize(.right, at: CGPoint(x: 306, y: 200))
+        m.drag(to: CGPoint(x: 306, y: 200))
+        XCTAssertEqual(m.rect, CGRect(x: 100, y: 100, width: 200, height: 200))
+        m.drag(to: CGPoint(x: 307, y: 200))
+        XCTAssertEqual(m.rect, CGRect(x: 100, y: 100, width: 201, height: 200))
+        m.endDrag()
+        XCTAssertEqual(m.rect, CGRect(x: 100, y: 100, width: 201, height: 200))
+
+        m = model(CGRect(x: 100, y: 100, width: 200, height: 200))
+        m.beginResize(.topLeft, at: CGPoint(x: 96, y: 104))
+        m.drag(to: CGPoint(x: 96, y: 104))
+        XCTAssertEqual(m.rect, CGRect(x: 100, y: 100, width: 200, height: 200))
+    }
+
+    func testBeginMoveOrResizeEndsUnfinishedCreate() {
+        var m = SelectionModel(bounds: bounds)
+        m.beginCreate(at: CGPoint(x: 10, y: 10))
+        m.drag(to: CGPoint(x: 10.5, y: 300))
+        m.beginResize(.right, at: CGPoint(x: 10.5, y: 150))
+        m.endDrag()
+        XCTAssertNil(m.rect)
+        XCTAssertFalse(m.isDragging)
+
+        m = SelectionModel(bounds: bounds)
+        m.beginCreate(at: CGPoint(x: 10, y: 10))
+        m.drag(to: CGPoint(x: 10.5, y: 10.5))
+        m.beginMove(at: CGPoint(x: 10, y: 10))
+        m.endDrag()
+        XCTAssertNil(m.rect)
+
+        // A proper create that is unfinished keeps its size when a move begins.
+        m = SelectionModel(bounds: bounds)
+        m.beginCreate(at: CGPoint(x: 10, y: 10))
+        m.drag(to: CGPoint(x: 110, y: 110))
+        m.beginMove(at: CGPoint(x: 50, y: 50))
+        m.drag(to: CGPoint(x: 60, y: 60))
+        m.endDrag()
+        XCTAssertEqual(m.rect, CGRect(x: 20, y: 20, width: 100, height: 100))
     }
 
     func testRoundingStaysInsideBounds() {
@@ -230,6 +275,12 @@ final class ScreenGeometryTests: XCTestCase {
         XCTAssertEqual(ScreenGeometry.pixelRect(selection: CGRect(x: 10, y: 20, width: 100, height: 50), scale: 2,
                                                 imageWidth: 2000, imageHeight: 1600),
                        CGRect(x: 20, y: 40, width: 200, height: 100))
+    }
+
+    func testPixelRectScale3() {
+        XCTAssertEqual(ScreenGeometry.pixelRect(selection: CGRect(x: 10, y: 20, width: 100, height: 50), scale: 3,
+                                                imageWidth: 3000, imageHeight: 2400),
+                       CGRect(x: 30, y: 60, width: 300, height: 150))
     }
 
     func testPixelRectFractionalInput() {

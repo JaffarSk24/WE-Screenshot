@@ -15,10 +15,14 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
     private let openURL: @Sendable (URL) -> Void
     private let now: @Sendable () -> Date
 
-    // Guards `refreshTask`. The store is read under it as well, so that the
-    // decision "fresh enough or refresh" is never made on stale tokens.
+    // Guards `refreshTask` and `generation`. The store is read under it as
+    // well, so that the decision "fresh enough or refresh" is never made on
+    // stale tokens, and every write that can race a refresh happens under it.
     private let lock = NSLock()
     private var refreshTask: Task<OAuthTokens, Error>?
+    // Bumped by signOut and by every new sign-in. A refresh that started in
+    // an older generation must not touch the store when it finishes.
+    private var generation = 0
 
     /// `openURL` opens the consent page in the user's browser. `now` is the clock.
     public init(config: OAuthClientConfig, transport: HTTPTransport, store: TokenStore,
@@ -69,6 +73,9 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
         let state = SecureRandom.token(byteCount: 32)
         let verifier = PKCE.makeVerifier()
         let listener = LoopbackRedirectListener()
+        // The listener ignores answers without our state, so a stray local
+        // request cannot end the attempt before the real redirect arrives.
+        listener.expectedState = state
 
         let redirectURI: URL
         let parameters: [String: String]
@@ -87,18 +94,29 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
             throw error
         }
 
-        if parameters["error"] != nil {
+        let code = try GoogleAuthorizer.redirectCode(parameters, expectedState: state)
+        do {
+            return try await exchange(code: code, codeVerifier: verifier, redirectURI: redirectURI)
+        } catch is CancellationError {
             throw CloudError.signInCancelled
         }
-        // The state is checked before anything else is done with the answer:
-        // a redirect that does not carry our state was not caused by us.
-        guard let returnedState = parameters["state"], constantTimeEquals(returnedState, state) else {
+    }
+
+    /// The authorisation code from a redirect. The listener already filters
+    /// on the state; this is the second check. The state comes first: an
+    /// answer that does not carry our state was not caused by us, and that
+    /// includes "error" answers.
+    static func redirectCode(_ parameters: [String: String], expectedState: String) throws -> String {
+        guard let returnedState = parameters["state"], constantTimeEquals(returnedState, expectedState) else {
             throw CloudError.signInRejected("The sign-in answer did not match the request.")
+        }
+        if parameters["error"] != nil {
+            throw CloudError.signInCancelled
         }
         guard let code = parameters["code"], !code.isEmpty else {
             throw CloudError.badResponse("No authorisation code in the answer")
         }
-        return try await exchange(code: code, codeVerifier: verifier, redirectURI: redirectURI)
+        return code
     }
 
     /// Exchanges an authorisation code for tokens and stores them.
@@ -119,8 +137,16 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
                                     message: JSONBody.googleMessage(data, status: response.statusCode))
         }
         let tokens = try parseTokens(data, previousRefreshToken: nil)
-        try store.save(tokens)
+        try commitSignIn(tokens)
         return tokens
+    }
+
+    /// A new sign-in: any refresh still running belongs to the old one.
+    private func commitSignIn(_ tokens: OAuthTokens) throws {
+        lock.lock(); defer { lock.unlock() }
+        generation += 1
+        refreshTask = nil
+        try store.save(tokens)
     }
 
     /// The stored access token, refreshed first when it expires within a
@@ -151,28 +177,66 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
         if tokens.expiresAt.timeIntervalSince(now()) > GoogleAuthorizer.refreshMargin {
             return .fresh(tokens.accessToken)
         }
+        let started = generation
         let task = Task { [self] () async throws -> OAuthTokens in
-            defer { refreshFinished() }
-            return try await refresh(tokens)
+            defer { refreshFinished(generation: started) }
+            do {
+                return try await refresh(tokens, generation: started)
+            } catch {
+                // Whatever went wrong belongs to a sign-in that is gone.
+                if let current = try currentTokensIfStale(started) { return current }
+                throw error
+            }
         }
         refreshTask = task
         return .wait(task)
     }
 
-    private func refreshFinished() {
+    private func refreshFinished(generation started: Int) {
         lock.lock(); defer { lock.unlock() }
-        refreshTask = nil
+        // signOut or a new sign-in already dropped this task, and a newer
+        // refresh may be running now; leave that one alone.
+        if started == generation { refreshTask = nil }
+    }
+
+    /// For a refresh of generation `started`: nil while that generation is
+    /// still current. Otherwise the tokens of the current sign-in, or
+    /// notSignedIn when there is none.
+    private func currentTokensIfStale(_ started: Int) throws -> OAuthTokens? {
+        lock.lock(); defer { lock.unlock() }
+        if started == generation { return nil }
+        guard let tokens = try store.load() else { throw CloudError.notSignedIn }
+        return tokens
+    }
+
+    /// Runs `write` on the store only if generation `started` is still
+    /// current; the check and the write happen under one lock hold.
+    private func writeIfCurrent(_ started: Int, _ write: () throws -> Void) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard started == generation else { return false }
+        try write()
+        return true
     }
 
     /// Revokes the tokens at Google (best effort) and clears the store.
     public func signOut() async {
-        let tokens = (try? store.load()) ?? nil
+        // The local copy goes first, together with the generation bump, so a
+        // refresh that finishes while the revoke is in flight is discarded.
+        let tokens = beginSignOut()
         if let token = tokens?.refreshToken ?? tokens?.accessToken, !token.isEmpty {
             // Revoking the refresh token also ends its access tokens. The
             // result does not matter: the local copy goes away either way.
             _ = try? await postForm(config.revocationEndpoint, [("token", token)])
         }
+    }
+
+    private func beginSignOut() -> OAuthTokens? {
+        lock.lock(); defer { lock.unlock() }
+        let tokens = (try? store.load()) ?? nil
+        generation += 1
+        refreshTask = nil
         try? store.clear()
+        return tokens
     }
 
     /// Google rejected this access token with 401: mark it as expired so that
@@ -187,9 +251,9 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
 
     // MARK: - Private
 
-    private func refresh(_ tokens: OAuthTokens) async throws -> OAuthTokens {
+    private func refresh(_ tokens: OAuthTokens, generation started: Int) async throws -> OAuthTokens {
         guard let refreshToken = tokens.refreshToken, !refreshToken.isEmpty else {
-            try? store.clear()
+            _ = try? writeIfCurrent(started) { try store.clear() }
             throw CloudError.notSignedIn
         }
         var pairs: [(String, String)] = [
@@ -205,14 +269,16 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
             if code == "invalid_grant" {
                 // The refresh token was revoked or expired: only a new
                 // sign-in helps, so the useless tokens are removed.
-                try? store.clear()
+                _ = try? writeIfCurrent(started) { try store.clear() }
                 throw CloudError.notSignedIn
             }
             throw CloudError.server(status: response.statusCode,
                                     message: JSONBody.googleMessage(data, status: response.statusCode))
         }
         let fresh = try parseTokens(data, previousRefreshToken: refreshToken)
-        try store.save(fresh)
+        guard try writeIfCurrent(started, { try store.save(fresh) }) else {
+            throw CloudError.notSignedIn
+        }
         return fresh
     }
 
@@ -244,7 +310,7 @@ public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
         do {
             return try await transport.send(request)
         } catch {
-            throw networkError(error)
+            throw transportError(error)
         }
     }
 }

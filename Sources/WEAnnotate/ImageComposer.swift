@@ -57,17 +57,37 @@ public enum ImageComposer {
 
     // MARK: Helpers
 
-    /// An opaque RGB bitmap context in the colour space of `image` when that is usable, else sRGB.
+    /// An opaque 8 bit RGB bitmap context in the colour space of `image` when that
+    /// is fine at 8 bits per component, else sRGB (Display P3 for wide gamut sources).
+    /// Linear and extended range spaces, and sources deeper than 8 bits, would band
+    /// or clip in an 8 bit bitmap, so they go to a gamma encoded space.
     private static func makeContext(width: Int, height: Int, like image: CGImage) -> CGContext? {
         let info = CGImageAlphaInfo.noneSkipLast.rawValue
         if let space = image.colorSpace, space.model == .rgb, space.supportsOutput,
+           image.bitsPerComponent <= 8, !isLinearOrExtended(space),
            let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                space: space, bitmapInfo: info) {
             return ctx
         }
-        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let fallbackName = image.colorSpace.map(isWideGamut) == true ? CGColorSpace.displayP3 : CGColorSpace.sRGB
+        guard let fallback = CGColorSpace(name: fallbackName) ?? CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         return CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                         space: srgb, bitmapInfo: info)
+                         space: fallback, bitmapInfo: info)
+    }
+
+    private static func spaceName(_ space: CGColorSpace) -> String {
+        (space.name as String?) ?? ""
+    }
+
+    private static func isLinearOrExtended(_ space: CGColorSpace) -> Bool {
+        let name = spaceName(space).lowercased()
+        return name.contains("linear") || name.contains("extended") || name.contains("hdr") || name.contains("pq")
+            || name.contains("hlg")
+    }
+
+    private static func isWideGamut(_ space: CGColorSpace) -> Bool {
+        let name = spaceName(space).lowercased()
+        return name.contains("p3") || name.contains("2020") || name.contains("adobe")
     }
 }
 

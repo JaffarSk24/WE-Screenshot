@@ -21,7 +21,7 @@ public struct SelectionModel: Equatable, Sendable {
     private enum Gesture: Equatable, Sendable {
         case create(anchor: CGPoint)
         case move(offset: CGSize, size: CGSize)
-        case resize(handle: SelectionHandle, original: CGRect)
+        case resize(handle: SelectionHandle, original: CGRect, offset: CGSize)
     }
 
     /// The area the selection must stay in: (0, 0, display width, display height).
@@ -85,6 +85,7 @@ public struct SelectionModel: Equatable, Sendable {
 
     /// Starts a new selection at the point (clamped to bounds); the old one is dropped.
     public mutating func beginCreate(at point: CGPoint) {
+        endDrag()
         let start = clamp(point)
         gesture = .create(anchor: start)
         rect = CGRect(origin: start, size: .zero)
@@ -93,6 +94,8 @@ public struct SelectionModel: Equatable, Sendable {
 
     /// Starts moving the whole selection; the grab offset is kept during the drag.
     public mutating func beginMove(at point: CGPoint) {
+        // A lost mouse up must not skip the end rules of the earlier gesture.
+        endDrag()
         guard let rect else { return }
         gesture = .move(offset: CGSize(width: point.x - rect.minX, height: point.y - rect.minY), size: rect.size)
         isDragging = true
@@ -101,8 +104,12 @@ public struct SelectionModel: Equatable, Sendable {
     /// Starts resizing by a handle. Dragging past the opposite edge flips the
     /// rectangle (the handle follows the mouse) instead of stopping.
     public mutating func beginResize(_ handle: SelectionHandle, at point: CGPoint) {
+        endDrag()
         guard let rect else { return }
-        gesture = .resize(handle: handle, original: rect)
+        // Keep the distance between the press and the handle centre so the edge
+        // does not jump to the mouse when the drag starts.
+        let c = SelectionModel.center(of: handle, in: rect)
+        gesture = .resize(handle: handle, original: rect, offset: CGSize(width: point.x - c.x, height: point.y - c.y))
         isDragging = true
     }
 
@@ -119,8 +126,8 @@ public struct SelectionModel: Equatable, Sendable {
             let x = min(max(point.x - offset.width, bounds.minX), max(bounds.minX, bounds.maxX - size.width))
             let y = min(max(point.y - offset.height, bounds.minY), max(bounds.minY, bounds.maxY - size.height))
             rect = CGRect(origin: CGPoint(x: x, y: y), size: size)
-        case .resize(let handle, let original):
-            let p = clamp(point)
+        case .resize(let handle, let original, let offset):
+            let p = clamp(CGPoint(x: point.x - offset.width, y: point.y - offset.height))
             var left = original.minX, right = original.maxX
             var top = original.minY, bottom = original.maxY
             switch handle {
@@ -153,8 +160,9 @@ public struct SelectionModel: Equatable, Sendable {
             rect = nil
             return
         }
-        let w = min(max(1, current.width.rounded()), bounds.width)
-        let h = min(max(1, current.height.rounded()), bounds.height)
+        // Round the edges the user placed, not origin and size separately.
+        let w = min(max(1, current.maxX.rounded() - current.minX.rounded()), bounds.width)
+        let h = min(max(1, current.maxY.rounded() - current.minY.rounded()), bounds.height)
         let x = min(max(current.minX.rounded(), bounds.minX), bounds.maxX - w)
         let y = min(max(current.minY.rounded(), bounds.minY), bounds.maxY - h)
         rect = CGRect(x: x, y: y, width: w, height: h)

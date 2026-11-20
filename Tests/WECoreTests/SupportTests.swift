@@ -107,6 +107,7 @@ final class ReleaseInfoTests: XCTestCase {
     func testWrongAssetName() {
         XCTAssertNil(ReleaseInfo.parse(githubJSON: json(assetName: "WE-Screenshot-1.1.0.zip")))
         XCTAssertNil(ReleaseInfo.parse(githubJSON: json(assetName: "we-screenshot-1.2.0.zip")))
+        XCTAssertNil(ReleaseInfo.parse(githubJSON: json(assetName: "WE-Screenshot-1.2.0.zip.sha256")))
     }
 
     func testMissingFields() {
@@ -131,6 +132,24 @@ final class ReleaseInfoTests: XCTestCase {
         let md = "### What's new\n\n- **Faster** capture\n- Fixed `crash` in [settings](https://x.test)\n\n\n* Star bullet\n\n## Install\nDrag the app.\nSHA-256: abc"
         XCTAssertEqual(ReleaseInfo.plainNotes(md),
                        "What's new\n\n\u{2022} Faster capture\n\u{2022} Fixed crash in settings\n\n\u{2022} Star bullet")
+    }
+
+    func testPlainNotesKeepsInstallerBullets() {
+        XCTAssertEqual(ReleaseInfo.plainNotes("- Installer is smaller\n- Faster capture\n- Fixed a crash"),
+                       "\u{2022} Installer is smaller\n\u{2022} Faster capture\n\u{2022} Fixed a crash")
+        XCTAssertEqual(ReleaseInfo.plainNotes("Installer is smaller\nmore"), "Installer is smaller\nmore")
+        XCTAssertEqual(ReleaseInfo.plainNotes("One\n- Installed size is 5 MB\nTwo"),
+                       "One\n\u{2022} Installed size is 5 MB\nTwo")
+        XCTAssertEqual(ReleaseInfo.plainNotes("One\n### Install\nDrag"), "One")
+        XCTAssertEqual(ReleaseInfo.plainNotes("One\nInstall:\nDrag"), "One")
+        XCTAssertEqual(ReleaseInfo.plainNotes("One\nInstallation\nDrag"), "One")
+    }
+
+    func testPlainNotesStripsEmphasisAndImages() {
+        XCTAssertEqual(ReleaseInfo.plainNotes("- *New* toolbar ![shot](https://x.test/a.png) _fast_"),
+                       "\u{2022} New toolbar shot fast")
+        XCTAssertEqual(ReleaseInfo.plainNotes("Uses snake_case_name and __init__ and 2*3*4"),
+                       "Uses snake_case_name and init and 2*3*4")
     }
 
     func testPlainNotesCutsAtInstallAndSHALines() {
@@ -184,6 +203,47 @@ final class SettingsAndColorTests: XCTestCase {
             XCTAssertNil(store.googleClientID)
             XCTAssertNil(store.driveFolderID)
             XCTAssertNil(store.googleAccountLabel)
+        }
+    }
+
+    func testSettersPostChangeNotificationOnMainQueue() {
+        withStore { store, _ in
+            let setters: [(String, () -> Void)] = [
+                ("hotkey", { store.captureHotKey = KeyCombo(keyCode: 1, modifiers: [.control]) }),
+                ("format", { store.imageFormat = .jpeg }),
+                ("quality", { store.jpegQuality = 0.4 }),
+                ("color", { store.drawingColor = .red }),
+                ("directory", { store.lastSaveDirectory = "/tmp/x" }),
+                ("openLink", { store.openLinkAfterUpload = true }),
+                ("autoCheck", { store.autoCheckUpdates = false }),
+                ("skipped", { store.skippedVersion = "9.9.9" }),
+                ("firstLaunch", { store.didFirstLaunch = true }),
+                ("downscale", { store.downscaleRetina = true }),
+                ("clientID", { store.googleClientID = "id" }),
+                ("folder", { store.driveFolderID = "f" }),
+                ("account", { store.googleAccountLabel = "a" }),
+            ]
+            for (name, set) in setters {
+                let posted = expectation(description: "main \(name)")
+                let token = NotificationCenter.default.addObserver(
+                    forName: SettingsStore.didChangeNotification, object: store, queue: nil) { _ in
+                    XCTAssertTrue(Thread.isMainThread, name)
+                    posted.fulfill()
+                }
+                set()
+                wait(for: [posted], timeout: 2)
+                NotificationCenter.default.removeObserver(token)
+            }
+            // A write from a background queue must still be announced on the main queue.
+            let background = expectation(description: "background write")
+            let token = NotificationCenter.default.addObserver(
+                forName: SettingsStore.didChangeNotification, object: store, queue: nil) { _ in
+                XCTAssertTrue(Thread.isMainThread)
+                background.fulfill()
+            }
+            DispatchQueue.global().async { store.skippedVersion = "10.0.0" }
+            wait(for: [background], timeout: 2)
+            NotificationCenter.default.removeObserver(token)
         }
     }
 

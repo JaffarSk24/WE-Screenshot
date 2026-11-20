@@ -191,31 +191,35 @@ final class SignInTests: XCTestCase {
         XCTAssertEqual(PKCE.challenge(for: verifier), consentFields["code_challenge"])
     }
 
-    func testWrongStateIsRejectedWithoutTokenRequest() async throws {
+    // The listener refuses an answer without our state and keeps waiting, so
+    // a wrong or missing state alone ends in the timeout, never in a token
+    // request. The authorizer's own state check is tested in
+    // RedirectStateTests.testAuthorizerChecksStateBeforeAnythingElse.
+    func testWrongStateTimesOutWithoutTokenRequest() async throws {
         let transport = MockTransport()
         transport.enqueue(200, #"{"access_token":"at-1","expires_in":3600}"#)
         let store = InMemoryTokenStore()
         let authorizer = GoogleAuthorizer(config: testConfig, transport: transport, store: store,
                                           openURL: browser(query: { _ in "code=abc&state=forged" }, seen: SeenURL()))
         do {
-            try await authorizer.signIn(timeout: 10)
-            XCTFail("expected signInRejected")
+            try await authorizer.signIn(timeout: 1)
+            XCTFail("expected signInCancelled")
         } catch {
-            guard case .signInRejected = error as? CloudError else { return XCTFail("got \(error)") }
+            XCTAssertEqual(error as? CloudError, .signInCancelled)
         }
         XCTAssertTrue(transport.requests.isEmpty)
         XCTAssertNil(try store.load())
     }
 
-    func testMissingStateIsRejected() async throws {
+    func testMissingStateTimesOutWithoutTokenRequest() async throws {
         let transport = MockTransport()
         let authorizer = GoogleAuthorizer(config: testConfig, transport: transport, store: InMemoryTokenStore(),
                                           openURL: browser(query: { _ in "code=abc" }, seen: SeenURL()))
         do {
-            try await authorizer.signIn(timeout: 10)
-            XCTFail("expected signInRejected")
+            try await authorizer.signIn(timeout: 1)
+            XCTFail("expected signInCancelled")
         } catch {
-            guard case .signInRejected = error as? CloudError else { return XCTFail("got \(error)") }
+            XCTAssertEqual(error as? CloudError, .signInCancelled)
         }
         XCTAssertTrue(transport.requests.isEmpty)
     }

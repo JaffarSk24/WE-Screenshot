@@ -9,6 +9,11 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
     static let maxRequestBytes = 16 * 1024
     /// A connection that sends nothing useful is dropped after this long.
     static let connectionTimeout: TimeInterval = 10
+    /// Starting a loopback listener takes milliseconds; anything longer
+    /// means it is stuck (for example in the waiting state).
+    static let startTimeout: TimeInterval = 5
+    /// More open connections than this are refused at once.
+    static let maxConnections = 16
 
     private let queue = DispatchQueue(label: "sk.whiteeagles.screenshot.loopback")
     private let lock = NSLock()
@@ -21,10 +26,20 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
     private var waitID = 0
     private var stopped = false
     private var cancelled = false
+    private var failure: Error?
+    private var state: String?
+
+    /// When set, only a redirect carrying this state ends the wait; any other
+    /// answer to "/" gets 400 and the wait goes on. Set it before start.
+    var expectedState: String? {
+        get { lock.lock(); defer { lock.unlock() }; return state }
+        set { lock.lock(); state = newValue; lock.unlock() }
+    }
 
     public init() {}
 
     deinit {
+        listener?.stateUpdateHandler = nil
         listener?.cancel()
         for connection in connections.values { connection.cancel() }
     }
@@ -56,30 +71,57 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
             self?.accept(connection)
         }
 
-        let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
-            let once = Once()
-            listener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    if let port = listener.port?.rawValue, once.claim() {
-                        continuation.resume(returning: port)
-                    }
-                case let .failed(error):
-                    if once.claim() { continuation.resume(throwing: CloudError.network(error.localizedDescription)) }
-                case .cancelled:
-                    if once.claim() { continuation.resume(throwing: CloudError.signInCancelled) }
-                default:
-                    break
-                }
-            }
-            listener.start(queue: queue)
+        let gate = StartGate()
+        listener.stateUpdateHandler = { [weak listener] state in
+            gate.handle(state, port: listener?.port?.rawValue)
         }
-        // The handler captures the listener; dropping it breaks that cycle.
-        listener.stateUpdateHandler = nil
+        listener.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + LoopbackRedirectListener.startTimeout) {
+            gate.timeOut()
+        }
+
+        let port: UInt16
+        do {
+            port = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { gate.attach($0) }
+            } onCancel: {
+                gate.cancel()
+            }
+        } catch {
+            stop()
+            throw error
+        }
+        // From now on a failing listener ends the wait at once instead of
+        // leaving it to the redirect timeout.
+        listener.stateUpdateHandler = { [weak self] state in
+            self?.listenerStateChanged(state)
+        }
         guard let url = URL(string: "http://127.0.0.1:\(port)") else {
             throw CloudError.badResponse("Bad loopback port")
         }
         return url
+    }
+
+    func listenerStateChanged(_ state: NWListener.State) {
+        let error: Error
+        switch state {
+        case let .failed(failure):
+            error = CloudError.network(failure.localizedDescription)
+        case .cancelled:
+            error = CloudError.signInCancelled
+        default:
+            return
+        }
+        lock.lock()
+        if stopped || result != nil {
+            lock.unlock()
+            return
+        }
+        if failure == nil { failure = error }
+        let pending = waiter
+        waiter = nil
+        lock.unlock()
+        pending?.resume(throwing: error)
     }
 
     private func install(_ listener: NWListener) -> Bool {
@@ -101,6 +143,11 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
                 if let result = result {
                     lock.unlock()
                     continuation.resume(returning: result)
+                    return
+                }
+                if let failure = failure {
+                    lock.unlock()
+                    continuation.resume(throwing: failure)
                     return
                 }
                 if stopped || cancelled || waiter != nil {
@@ -132,6 +179,7 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
         stopped = true
         let listener = self.listener
         self.listener = nil
+        listener?.stateUpdateHandler = nil
         let open = Array(connections.values)
         connections.removeAll()
         let pending = waiter
@@ -159,7 +207,7 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         lock.lock()
-        if stopped {
+        if stopped || connections.count >= LoopbackRedirectListener.maxConnections {
             lock.unlock()
             connection.cancel()
             return
@@ -237,6 +285,15 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
             return
         }
 
+        // With an expected state, an answer that does not carry it was not
+        // caused by this sign-in and must not end it.
+        if let expected = expectedState {
+            guard let returned = parameters["state"], constantTimeEquals(returned, expected) else {
+                respond(on: connection, status: "400 Bad Request", html: nil)
+                return
+            }
+        }
+
         let text = parameters["error"] != nil
             ? L("Sign-in was not completed. You can close this window.")
             : L("You can close this window and return to WE Screenshot.")
@@ -283,6 +340,63 @@ public final class LoopbackRedirectListener: @unchecked Sendable {
         @media(prefers-color-scheme:dark){body{background:#1d1d1f;color:#f5f5f7}}</style>
         </head><body><p>\(escaped)</p></body></html>
         """
+    }
+}
+
+/// Collects the outcome of starting the listener: the first of ready with a
+/// port, failure, waiting, cancellation or timeout wins.
+final class StartGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<UInt16, Error>?
+    private var outcome: Result<UInt16, Error>?
+
+    func attach(_ continuation: CheckedContinuation<UInt16, Error>) {
+        lock.lock()
+        if let outcome = outcome {
+            lock.unlock()
+            continuation.resume(with: outcome)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func handle(_ state: NWListener.State, port: UInt16?) {
+        switch state {
+        case .ready:
+            // Ready without a port is not usable; the timeout handles it.
+            if let port = port { finish(.success(port)) }
+        case let .failed(error):
+            finish(.failure(CloudError.network(error.localizedDescription)))
+        case let .waiting(error):
+            // A loopback listener has no reason to wait for a network.
+            finish(.failure(CloudError.network(error.localizedDescription)))
+        case .cancelled:
+            finish(.failure(CloudError.signInCancelled))
+        default:
+            break
+        }
+    }
+
+    func timeOut() {
+        finish(.failure(CloudError.network("The local sign-in listener did not start.")))
+    }
+
+    func cancel() {
+        finish(.failure(CancellationError()))
+    }
+
+    private func finish(_ result: Result<UInt16, Error>) {
+        lock.lock()
+        guard outcome == nil else {
+            lock.unlock()
+            return
+        }
+        outcome = result
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
     }
 }
 

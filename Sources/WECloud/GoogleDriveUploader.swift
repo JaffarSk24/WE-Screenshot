@@ -221,7 +221,7 @@ public final class GoogleDriveUploader: ScreenshotUploading, @unchecked Sendable
         do {
             return try await transport.send(request)
         } catch {
-            throw networkError(error)
+            throw transportError(error)
         }
     }
 
