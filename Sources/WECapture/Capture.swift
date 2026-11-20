@@ -1,8 +1,8 @@
+import AppKit
 import CoreGraphics
 import Foundation
+import ScreenCaptureKit
 import WECore
-
-// CONTRACT STUB. The public declarations are fixed; the bodies are placeholders.
 
 public enum CaptureError: Error, Equatable {
     /// The app has no Screen Recording permission.
@@ -22,7 +22,35 @@ public final class ScreenCaptureService: ScreenCapturing {
     public init() {}
 
     public func captureAllDisplays() async throws -> [DisplaySnapshot] {
-        fatalError("stub")
+        // Without the permission ScreenCaptureKit would either fail late or
+        // return wallpaper only frames, so refuse early with a clear error.
+        guard CGPreflightScreenCaptureAccess() else {
+            throw CaptureError.permissionDenied
+        }
+        do {
+            let screens = await MainActor.run { currentScreens() }
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let targets = matchDisplays(content.displays, to: screens)
+            guard !targets.isEmpty else { throw CaptureError.noDisplays }
+
+            let snapshots = try await withThrowingTaskGroup(of: DisplaySnapshot.self) { group -> [DisplaySnapshot] in
+                for target in targets {
+                    group.addTask {
+                        let image = try await captureDisplay(target.display, info: target.info)
+                        return DisplaySnapshot(display: target.info, image: image)
+                    }
+                }
+                var result: [DisplaySnapshot] = []
+                for try await snapshot in group {
+                    result.append(snapshot)
+                }
+                return result
+            }
+            let order = orderedDisplayIDs(snapshots.map { $0.display.id }, primary: CGMainDisplayID())
+            return order.compactMap { id in snapshots.first { $0.display.id == id } }
+        } catch {
+            throw mapCaptureError(error)
+        }
     }
 }
 
@@ -30,18 +58,21 @@ public final class ScreenCaptureService: ScreenCapturing {
 public enum ScreenRecordingPermission {
     /// True when the app may capture the screen. Does not show any prompt.
     public static var isGranted: Bool {
-        fatalError("stub")
+        CGPreflightScreenCaptureAccess()
     }
 
     /// Asks macOS to show its permission prompt (shown once per app); returns
     /// the state right after the call.
     @discardableResult
     public static func request() -> Bool {
-        fatalError("stub")
+        CGRequestScreenCaptureAccess()
     }
 
     /// Opens the Screen Recording page of System Settings.
     public static func openSystemSettings() {
-        fatalError("stub")
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }

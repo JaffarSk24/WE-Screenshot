@@ -2,8 +2,6 @@ import CoreGraphics
 import Foundation
 import WECore
 
-// CONTRACT STUB. The public declarations are fixed; the bodies are placeholders.
-//
 // All coordinates are in overlay space (see WECore/Selection.swift): points,
 // origin at the top left corner of the display, y grows down.
 
@@ -47,107 +45,4 @@ public enum AnnotationStyle {
     public static let markerAlpha: Double = 0.4
     public static let textFontSize: CGFloat = 18
     public static let textFontName = "Helvetica-Bold"
-}
-
-/// The finished annotations with undo.
-public struct AnnotationStack: Equatable, Sendable {
-    public private(set) var items: [Annotation] = []
-
-    public init() {}
-
-    public var canUndo: Bool { fatalError("stub") }
-
-    public mutating func add(_ annotation: Annotation) {
-        fatalError("stub")
-    }
-
-    /// Removes the last annotation; false when there was nothing to undo.
-    @discardableResult
-    public mutating func undo() -> Bool {
-        fatalError("stub")
-    }
-
-    public mutating func clear() {
-        fatalError("stub")
-    }
-}
-
-/// Builds one annotation from a mouse gesture: begin on mouse down, update on
-/// every drag, finish on mouse up. Not used for text.
-public struct AnnotationGesture: Equatable, Sendable {
-    public let tool: Tool
-    public let color: RGBAColor
-
-    /// `tool` must not be .text.
-    public init(tool: Tool, color: RGBAColor, start: CGPoint) {
-        fatalError("stub")
-    }
-
-    /// `clip` is the selection: points outside are clamped to it, so nothing
-    /// is drawn beyond the screenshot.
-    public mutating func update(to point: CGPoint, clip: CGRect) {
-        fatalError("stub")
-    }
-
-    /// The annotation as it looks right now, for the live preview.
-    public var preview: Annotation? { fatalError("stub") }
-
-    /// The finished annotation; nil when the mouse did not really move (a
-    /// click), so that stray clicks leave no dots.
-    public func finish() -> Annotation? {
-        fatalError("stub")
-    }
-}
-
-public enum AnnotationRenderer {
-    /// Draws the annotations into a context whose user space IS overlay space:
-    /// origin top left, y down, one unit is one point (a flipped NSView's
-    /// context, or a bitmap context prepared by ImageComposer). Text must come
-    /// out upright in such a flipped context.
-    public static func draw(_ annotations: [Annotation], in context: CGContext) {
-        fatalError("stub")
-    }
-
-    /// The size a text annotation takes, for placing the caret and the editor.
-    public static func textSize(_ text: String, fontSize: CGFloat) -> CGSize {
-        fatalError("stub")
-    }
-}
-
-public enum ImageComposerError: Error, Equatable {
-    case emptySelection
-    case cannotCreateContext
-    case cannotCrop
-}
-
-public enum ImageComposer {
-    /// The final screenshot: the selection cropped out of the display snapshot
-    /// at full pixel resolution, with the annotations drawn over it.
-    /// `selection` is in overlay space; the result is
-    /// ScreenGeometry.pixelRect(selection...) in size and has no alpha channel.
-    public static func compose(snapshot: DisplaySnapshot, selection: CGRect,
-                               annotations: [Annotation]) throws -> CGImage {
-        fatalError("stub")
-    }
-
-    /// The image resampled to one pixel per point (high quality interpolation),
-    /// for the "save Retina screenshots at half size" setting. With scale <= 1
-    /// the image is returned as it is.
-    public static func downscaled(_ image: CGImage, fromScale scale: CGFloat) throws -> CGImage {
-        fatalError("stub")
-    }
-}
-
-public enum ImageEncoderError: Error, Equatable {
-    case cannotEncode
-}
-
-public enum ImageEncoder {
-    /// Encodes the image. `scale` is the display's pixels per point: it is
-    /// written as the resolution (72 * scale DPI), so a Retina screenshot opens
-    /// at its on-screen size, like the system screenshots. JPEG uses `quality`.
-    public static func data(for image: CGImage, format: ImageFormat, scale: CGFloat,
-                            jpegQuality: Double) throws -> Data {
-        fatalError("stub")
-    }
 }

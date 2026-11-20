@@ -1,8 +1,6 @@
 import Foundation
 import WECore
 
-// CONTRACT STUB. The public declarations are fixed; the bodies are placeholders.
-//
 // Nothing here touches the user interface. Everything that talks to the
 // network goes through HTTPTransport, so tests replace the network.
 
@@ -19,8 +17,27 @@ public protocol HTTPTransport: Sendable {
 public struct URLSessionTransport: HTTPTransport {
     public init() {}
 
+    // One session for the whole app: sessions are expensive and this one keeps
+    // no state worth isolating (no cookies, no cache, no credentials).
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 120
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: configuration)
+    }()
+
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        fatalError("stub")
+        let (data, response) = try await URLSessionTransport.session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CloudError.badResponse("Not an HTTP response")
+        }
+        return (data, http)
     }
 }
 
@@ -44,7 +61,37 @@ public enum CloudError: Error, Equatable, LocalizedError {
     case network(String)
 
     public var errorDescription: String? {
-        fatalError("stub")
+        switch self {
+        case .notConfigured:
+            return L("Google Drive upload is not set up in this build.")
+        case .notSignedIn:
+            return L("Not signed in to Google Drive.")
+        case .signInCancelled:
+            return L("Google sign-in was cancelled.")
+        case .signInRejected:
+            // The detail is for developers; the user only needs to retry.
+            return L("Google sign-in failed. Please try again.")
+        case let .server(status, message):
+            let detail = ErrorText.sanitized(message)
+            if detail.isEmpty {
+                return String(format: L("Google Drive answered with error %d."), status)
+            }
+            return String(format: L("Google Drive answered with error %d: %@"), status, detail)
+        case let .badResponse(detail):
+            let clean = ErrorText.sanitized(detail)
+            if clean.isEmpty { return L("Google sent an answer that could not be read.") }
+            return String(format: L("Unexpected answer: %@"), clean)
+        case let .sharingForbidden(message):
+            let detail = ErrorText.sanitized(message)
+            if detail.isEmpty {
+                return L("The screenshot was uploaded, but it cannot be shared by link.")
+            }
+            return String(format: L("The screenshot was uploaded, but it cannot be shared by link: %@"), detail)
+        case let .network(message):
+            let detail = ErrorText.sanitized(message)
+            if detail.isEmpty { return L("Could not reach Google.") }
+            return String(format: L("Could not reach Google: %@"), detail)
+        }
     }
 }
 
@@ -72,7 +119,14 @@ public struct OAuthClientConfig: Equatable, Sendable {
     /// Google's endpoints with the only scope the app uses:
     /// https://www.googleapis.com/auth/drive.file
     public static func google(clientID: String, clientSecret: String?) -> OAuthClientConfig {
-        fatalError("stub")
+        OAuthClientConfig(
+            clientID: clientID,
+            clientSecret: clientSecret,
+            scopes: ["https://www.googleapis.com/auth/drive.file"],
+            authorizationEndpoint: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!,
+            tokenEndpoint: URL(string: "https://oauth2.googleapis.com/token")!,
+            revocationEndpoint: URL(string: "https://oauth2.googleapis.com/revoke")!
+        )
     }
 }
 
@@ -96,132 +150,85 @@ public protocol TokenStore: Sendable {
     func clear() throws
 }
 
-/// Small secrets in the login keychain: generic password items of one service.
-public final class KeychainStore: @unchecked Sendable {
-    public static let defaultService = "sk.whiteeagles.screenshot.google"
-
-    public init(service: String = KeychainStore.defaultService) {
-        fatalError("stub")
-    }
-
-    /// The stored value, nil when there is none.
-    public func string(for account: String) throws -> String? { fatalError("stub") }
-
-    /// Stores the value; nil or an empty string removes the item.
-    public func set(_ value: String?, for account: String) throws { fatalError("stub") }
-}
-
 /// Tokens in the login keychain, as one generic password item.
 public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
+    private let keychain: KeychainStore
+    private let account: String
+
     public init(keychain: KeychainStore = KeychainStore(), account: String = "oauth-tokens") {
-        fatalError("stub")
+        self.keychain = keychain
+        self.account = account
     }
 
-    public func load() throws -> OAuthTokens? { fatalError("stub") }
-    public func save(_ tokens: OAuthTokens) throws { fatalError("stub") }
-    public func clear() throws { fatalError("stub") }
+    public func load() throws -> OAuthTokens? {
+        guard let json = try keychain.string(for: account), let data = json.data(using: .utf8) else {
+            return nil
+        }
+        // An unreadable item (an older or damaged format) means "signed out":
+        // the user signs in again instead of being stuck with an error.
+        return try? TokenCoding.decoder.decode(OAuthTokens.self, from: data)
+    }
+
+    public func save(_ tokens: OAuthTokens) throws {
+        let data = try TokenCoding.encoder.encode(tokens)
+        try keychain.set(String(decoding: data, as: UTF8.self), for: account)
+    }
+
+    public func clear() throws {
+        try keychain.set(nil, for: account)
+    }
 }
 
 /// Tokens in memory, for tests.
 public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens: OAuthTokens?
+
     public init(_ tokens: OAuthTokens? = nil) {
-        fatalError("stub")
+        self.tokens = tokens
     }
 
-    public func load() throws -> OAuthTokens? { fatalError("stub") }
-    public func save(_ tokens: OAuthTokens) throws { fatalError("stub") }
-    public func clear() throws { fatalError("stub") }
+    public func load() throws -> OAuthTokens? {
+        lock.lock(); defer { lock.unlock() }
+        return tokens
+    }
+
+    public func save(_ tokens: OAuthTokens) throws {
+        lock.lock(); defer { lock.unlock() }
+        self.tokens = tokens
+    }
+
+    public func clear() throws {
+        lock.lock(); defer { lock.unlock() }
+        tokens = nil
+    }
 }
 
 /// Proof Key for Code Exchange (RFC 7636), method S256.
 public enum PKCE {
     /// A new random code verifier: 43...128 characters of the unreserved set.
     public static func makeVerifier() -> String {
-        fatalError("stub")
+        // 64 random bytes give 86 base64url characters, well inside 43...128.
+        Base64URL.encode(SecureRandom.bytes(64))
     }
 
     /// BASE64URL(SHA256(verifier)) without padding.
     public static func challenge(for verifier: String) -> String {
-        fatalError("stub")
-    }
-}
-
-/// A one-shot HTTP listener on 127.0.0.1 that receives the OAuth redirect.
-public final class LoopbackRedirectListener: @unchecked Sendable {
-    public init() {
-        fatalError("stub")
-    }
-
-    /// Starts listening on a free port of the loopback interface only and
-    /// returns the redirect URI to send to Google: "http://127.0.0.1:PORT".
-    public func start() async throws -> URL {
-        fatalError("stub")
-    }
-
-    /// Waits for the browser's request to the redirect URI and returns its
-    /// query parameters ("code", "state", "error"...). The browser gets a small
-    /// page saying the window can be closed. Requests for other paths (such as
-    /// /favicon.ico) are answered with 404 and do not end the wait.
-    /// Throws CloudError.signInCancelled after `timeout` seconds.
-    public func waitForRedirect(timeout: TimeInterval) async throws -> [String: String] {
-        fatalError("stub")
-    }
-
-    public func stop() {
-        fatalError("stub")
+        Base64URL.encode(SHA256Digest.hash(Data(verifier.utf8)))
     }
 }
 
 /// Gives out a valid access token.
 public protocol AccessTokenProviding: Sendable {
     func validAccessToken() async throws -> String
+
+    /// Tells the provider that the server rejected this access token (401),
+    /// so that the next validAccessToken does not hand out the same one.
+    func invalidate(accessToken: String)
 }
 
-/// Sign-in with Google for installed apps: the system browser, a loopback
-/// redirect and PKCE. Keeps the tokens in the TokenStore and refreshes them.
-public final class GoogleAuthorizer: AccessTokenProviding, @unchecked Sendable {
-    /// `openURL` opens the consent page in the user's browser. `now` is the clock.
-    public init(config: OAuthClientConfig, transport: HTTPTransport, store: TokenStore,
-                openURL: @escaping @Sendable (URL) -> Void,
-                now: @escaping @Sendable () -> Date = { Date() }) {
-        fatalError("stub")
-    }
-
-    /// True when tokens are stored (they may still turn out to be revoked).
-    public var isSignedIn: Bool { fatalError("stub") }
-
-    /// The consent page URL for a redirect URI, state and PKCE challenge.
-    /// Asks for offline access so that a refresh token is issued.
-    public func authorizationURL(redirectURI: URL, state: String, codeChallenge: String) -> URL {
-        fatalError("stub")
-    }
-
-    /// The whole sign-in: starts the listener, opens the browser, waits for the
-    /// redirect (at most `timeout` seconds), checks the state, exchanges the
-    /// code for tokens and stores them.
-    @discardableResult
-    public func signIn(timeout: TimeInterval = 300) async throws -> OAuthTokens {
-        fatalError("stub")
-    }
-
-    /// Exchanges an authorisation code for tokens and stores them.
-    @discardableResult
-    public func exchange(code: String, codeVerifier: String, redirectURI: URL) async throws -> OAuthTokens {
-        fatalError("stub")
-    }
-
-    /// The stored access token, refreshed first when it expires within a
-    /// minute. Throws CloudError.notSignedIn when there are no tokens or the
-    /// refresh token was rejected (invalid_grant); the stored tokens are then
-    /// cleared.
-    public func validAccessToken() async throws -> String {
-        fatalError("stub")
-    }
-
-    /// Revokes the tokens at Google (best effort) and clears the store.
-    public func signOut() async {
-        fatalError("stub")
-    }
+public extension AccessTokenProviding {
+    func invalidate(accessToken: String) {}
 }
 
 public struct UploadResult: Equatable, Sendable {
@@ -240,31 +247,4 @@ public struct UploadResult: Equatable, Sendable {
 
 public protocol ScreenshotUploading: Sendable {
     func upload(data: Data, fileName: String, mimeType: String) async throws -> UploadResult
-}
-
-/// Uploads into the folder "WE Screenshot" of the user's Google Drive and
-/// opens the file to anyone with the link (reader).
-public final class GoogleDriveUploader: ScreenshotUploading, @unchecked Sendable {
-    /// `cachedFolderID` and `storeFolderID` read and write the remembered ID of
-    /// the folder, so it is not searched for on every upload.
-    public init(tokens: AccessTokenProviding, transport: HTTPTransport,
-                folderName: String = "WE Screenshot",
-                cachedFolderID: @escaping @Sendable () -> String?,
-                storeFolderID: @escaping @Sendable (String?) -> Void) {
-        fatalError("stub")
-    }
-
-    /// Steps: make sure the folder exists (the cached ID, else search among the
-    /// files the app created, else create it; a cached folder that is gone or
-    /// in the trash is created again), upload the file into it, add the
-    /// permission "anyone with the link can view", return the links.
-    /// A 401 answer makes one more attempt with a fresh token.
-    public func upload(data: Data, fileName: String, mimeType: String) async throws -> UploadResult {
-        fatalError("stub")
-    }
-
-    /// Name or e-mail of the account the tokens belong to, for display.
-    public func accountLabel() async throws -> String {
-        fatalError("stub")
-    }
 }
