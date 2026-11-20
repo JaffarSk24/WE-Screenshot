@@ -1,0 +1,5 @@
+# Copy this file to google-client.local (it is ignored by git) and fill in the values.
+# tools/build_app.sh writes them into the built app, so users only press "Sign In".
+# Use the ID and secret of a Google OAuth client of type "Desktop app".
+CLIENT_ID=
+CLIENT_SECRET=

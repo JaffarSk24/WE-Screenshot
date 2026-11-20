@@ -2,7 +2,7 @@
 "Link copied" = "Odkaz bol skopírovaný";
 "Google sign-in did not work." = "Prihlásenie do Google zlyhalo.";
 "Google Drive is not set up yet." = "Google Drive ešte nie je nastavený.";
-"Enter the ID and secret of your own Google OAuth client in Settings first." = "Najprv v Nastaveniach zadajte ID a tajný kľúč vlastného klienta Google OAuth.";
+"This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "V tomto zostavení nie je nastavené prihlásenie do Google. Klienta Google OAuth môžete zadať v Nastaveniach.";
 "Open Settings" = "Otvoriť Nastavenia";
 "Cancel" = "Zrušiť";
 "The screenshot was not uploaded." = "Snímka obrazovky sa nenahrala.";
@@ -93,9 +93,11 @@
 "Save Retina screenshots at half size" = "Ukladať snímky Retina v polovičnej veľkosti";
 "Open the link after upload" = "Po nahratí otvoriť odkaz";
 "Sign In…" = "Prihlásiť sa…";
+"Use my own Google OAuth client" = "Použiť vlastného klienta Google OAuth";
 "Settings" = "Nastavenia";
 "Shortcut:" = "Skratka:";
 "Image format:" = "Formát obrázka:";
+"Screenshots are uploaded to the folder “WE Screenshot” in your own Google Drive." = "Snímky obrazovky sa nahrávajú do priečinka „WE Screenshot“ na vašom Google Drive.";
 "Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once." = "Nahraté súbory sa ukladajú do priečinka „WE Screenshot“ vo vašom vlastnom Google Drive. Google vyžaduje, aby si každý používateľ aplikácie s otvoreným zdrojovým kódom raz vytvoril osobného klienta OAuth.";
 "How to get these…" = "Ako ich získať…";
 "Waiting for the browser…" = "Čaká sa na prehliadač…";
@@ -105,3 +107,6 @@
 "Sign Out" = "Odhlásiť sa";
 "Signed out" = "Odhlásený";
 "Not set up" = "Nenastavené";
+"Stop using your own Google OAuth client?" = "Prestať používať vlastného klienta Google OAuth?";
+"Your own client is removed and you are signed out. You can sign in again with the built-in client." = "Váš klient sa odstráni a budete odhlásení. Znova sa môžete prihlásiť so vstavaným klientom.";
+"Remove" = "Odstrániť";

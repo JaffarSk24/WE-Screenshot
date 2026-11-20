@@ -40,11 +40,31 @@ public final class CloudCoordinator {
     /// yet and agrees to open the settings; the app shows its Settings window.
     public var onNeedsSetup: (() -> Void)?
 
-    /// True when the user has entered the client ID and secret of a Google
-    /// OAuth client (the app ships without one).
-    public var isConfigured: Bool {
-        ActionRules.normalized(settings.googleClientID) != nil && ActionRules.normalized(clientSecret) != nil
+    /// True when the app bundle carries its own Google OAuth client (the
+    /// Info.plist keys WEGoogleClientID and WEGoogleClientSecret, both set).
+    public var hasBuiltInClient: Bool { Self.builtInClient != nil }
+
+    /// True when the user has stored their own client ID and secret.
+    public var usesOwnClient: Bool { ownClient != nil }
+
+    /// True when a client is available: the user's own or the built-in one.
+    public var isConfigured: Bool { effectiveClient != nil }
+
+    private static var builtInClient: (id: String, secret: String)? {
+        let id = Bundle.main.object(forInfoDictionaryKey: "WEGoogleClientID") as? String
+        let secret = Bundle.main.object(forInfoDictionaryKey: "WEGoogleClientSecret") as? String
+        guard let id = ActionRules.normalized(id), let secret = ActionRules.normalized(secret) else { return nil }
+        return (id, secret)
     }
+
+    private var ownClient: (id: String, secret: String)? {
+        guard let id = ActionRules.normalized(settings.googleClientID),
+              let secret = ActionRules.normalized(clientSecret) else { return nil }
+        return (id, secret)
+    }
+
+    /// The client used for sign-in and uploads: the user's own, else the built-in one.
+    private var effectiveClient: (id: String, secret: String)? { ownClient ?? Self.builtInClient }
 
     /// The stored client secret (kept in the keychain); nil when not set.
     public var clientSecret: String? {
@@ -59,14 +79,16 @@ public final class CloudCoordinator {
         return value
     }
 
-    /// Stores the user's OAuth client: the ID in the settings, the secret in
-    /// the keychain. Changing either one signs the user out.
+    /// Stores the user's own OAuth client: the ID in the settings, the secret in
+    /// the keychain. Empty values remove it, which switches back to the built-in
+    /// client. A change of the client in use signs the user out.
     public func setClient(id: String?, secret: String?) {
         let newID = ActionRules.normalized(id)
         let newSecret = ActionRules.normalized(secret)
         let changed = ActionRules.clientChanged(oldID: settings.googleClientID, newID: newID,
                                                 oldSecret: clientSecret, newSecret: newSecret)
         guard changed else { return }
+        let oldEffective = effectiveClient
         // The secret goes first, while a failure still changes nothing else.
         do {
             try keychain.set(newSecret, for: Self.secretAccount)
@@ -74,16 +96,19 @@ public final class CloudCoordinator {
             Alerts.inform(L("The client secret could not be saved to the keychain."), error.localizedDescription)
             return
         }
-        // A pending sign-in belongs to the old client.
-        authEpoch += 1
-        cancelSignIn()
-        // Tokens belong to the old client: forget them before the new one is in place.
-        try? KeychainTokenStore().clear()
-        settings.googleAccountLabel = nil
-        settings.driveFolderID = nil
         settings.googleClientID = newID
         secretCache = .some(newSecret)
-        stack = nil
+        let newEffective = effectiveClient
+        if oldEffective?.id != newEffective?.id || oldEffective?.secret != newEffective?.secret {
+            // A pending sign-in belongs to the old client.
+            authEpoch += 1
+            cancelSignIn()
+            // Tokens belong to the old client: forget them.
+            try? KeychainTokenStore().clear()
+            settings.googleAccountLabel = nil
+            settings.driveFolderID = nil
+            stack = nil
+        }
         onStateChange?()
     }
 
@@ -118,7 +143,7 @@ public final class CloudCoordinator {
     }
 
     private func currentStack() -> Stack? {
-        guard let id = ActionRules.normalized(settings.googleClientID), let secret = clientSecret else { return nil }
+        guard let (id, secret) = effectiveClient else { return nil }
         if let stack, stack.clientID == id, stack.secret == secret { return stack }
         let transport = URLSessionTransport()
         let authorizer = GoogleAuthorizer(config: .google(clientID: id, clientSecret: secret),
@@ -224,7 +249,7 @@ public final class CloudCoordinator {
         AppFocus.activate()
         let alert = NSAlert()
         alert.messageText = L("Google Drive is not set up yet.")
-        alert.informativeText = L("Enter the ID and secret of your own Google OAuth client in Settings first.")
+        alert.informativeText = L("This build has no Google sign-in set up. You can enter a Google OAuth client in Settings.")
         alert.addButton(withTitle: L("Open Settings"))
         alert.addButton(withTitle: L("Cancel"))
         if alert.runModal() == .alertFirstButtonReturn { onNeedsSetup?() }

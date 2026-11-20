@@ -148,6 +148,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private let clientSecretField = NSSecureTextField()
     private let driveStatus = NSTextField(labelWithString: "")
     private let signButton = NSButton(title: L("Sign In…"), target: nil, action: nil)
+    private let ownClientCheck = NSButton(checkboxWithTitle: L("Use my own Google OAuth client"), target: nil, action: nil)
+    /// The Client ID and secret fields with their buttons; hidden while the
+    /// built-in client is used.
+    private var clientFieldsStack = NSStackView()
+    /// Whether the credential fields are shown (only matters with a built-in client).
+    private var ownClientExpanded = false
+    private var shownFieldsState: Bool?
+    private var contentRoot: NSView?
 
     init(settings: SettingsStore, cloud: CloudCoordinator, updater: Updater,
          applyHotKey: @escaping (KeyCombo) -> Bool,
@@ -179,6 +187,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             // Opened fresh: show what is stored.
             clientIDDirty = false
             clientSecretDirty = false
+            ownClientExpanded = cloud.usesOwnClient
         }
         refresh()
         if !window.isVisible { window.center() }
@@ -193,6 +202,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         recorder.stopRecording()
         clientIDDirty = false
         clientSecretDirty = false
+        ownClientExpanded = cloud.usesOwnClient
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -277,6 +287,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             drive.widthAnchor.constraint(equalToConstant: 480),
         ])
         window.contentView = content
+        contentRoot = content
+        applyFieldsVisibility(resize: false)
         window.setContentSize(content.fittingSize)
     }
 
@@ -285,8 +297,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         box.title = "Google Drive"
         box.titlePosition = .atTop
 
-        let explanation = NSTextField(wrappingLabelWithString:
-            L("Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once."))
+        let builtIn = cloud.hasBuiltInClient
+        let explanation = NSTextField(wrappingLabelWithString: builtIn
+            ? L("Screenshots are uploaded to the folder “WE Screenshot” in your own Google Drive.")
+            : L("Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once."))
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.textColor = .secondaryLabelColor
         explanation.preferredMaxLayoutWidth = 440
@@ -310,6 +324,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         let buttons = NSStackView(views: [help, save])
         buttons.orientation = .horizontal
         buttons.spacing = 8
+        clientFieldsStack = NSStackView(views: [fields, buttons])
+        clientFieldsStack.orientation = .vertical
+        clientFieldsStack.alignment = .leading
+        clientFieldsStack.spacing = 10
+        ownClientCheck.target = self
+        ownClientCheck.action = #selector(ownClientToggled)
 
         signButton.target = self
         signButton.action = #selector(signClicked)
@@ -319,7 +339,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         statusRow.orientation = .horizontal
         statusRow.spacing = 10
 
-        let stack = NSStackView(views: [explanation, fields, buttons, statusRow])
+        let stack = NSStackView(views: builtIn
+            ? [explanation, statusRow, ownClientCheck, clientFieldsStack]
+            : [explanation, clientFieldsStack, statusRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -354,6 +376,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         openLinkCheck.state = settings.openLinkAfterUpload ? .on : .off
         loginCheck.state = SMAppService.mainApp.status == .enabled ? .on : .off
         updatesCheck.state = settings.autoCheckUpdates ? .on : .off
+        if cloud.usesOwnClient { ownClientExpanded = true }
+        ownClientCheck.state = ownClientExpanded ? .on : .off
+        applyFieldsVisibility(resize: true)
         if !clientIDDirty && !isEditing(clientIDField) { clientIDField.stringValue = settings.googleClientID ?? "" }
         if !clientSecretDirty && !isEditing(clientSecretField) { clientSecretField.stringValue = cloud.clientSecret ?? "" }
         if SignInProgress.isWaiting {
@@ -371,7 +396,61 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
     }
 
+    /// Shows or hides the credential fields and resizes the window to fit,
+    /// keeping its top edge in place.
+    private func applyFieldsVisibility(resize: Bool) {
+        let visible = !cloud.hasBuiltInClient || ownClientExpanded
+        guard shownFieldsState != visible else { return }
+        shownFieldsState = visible
+        clientFieldsStack.isHidden = !visible
+        guard resize, let content = contentRoot else { return }
+        content.layoutSubtreeIfNeeded()
+        let oldHeight = window.frame.height
+        window.setContentSize(content.fittingSize)
+        var frame = window.frame
+        frame.origin.y += oldHeight - frame.height
+        window.setFrame(frame, display: true)
+    }
+
     // MARK: Actions
+
+    @objc private func ownClientToggled() {
+        if ownClientCheck.state == .on {
+            ownClientExpanded = true
+            refresh()
+            return
+        }
+        guard cloud.usesOwnClient else {
+            ownClientExpanded = false
+            clientIDDirty = false
+            clientSecretDirty = false
+            clientIDField.stringValue = ""
+            clientSecretField.stringValue = ""
+            window.makeFirstResponder(nil)
+            refresh()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = L("Stop using your own Google OAuth client?")
+        alert.informativeText = L("Your own client is removed and you are signed out. You can sign in again with the built-in client.")
+        alert.addButton(withTitle: L("Remove"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            if response == .alertFirstButtonReturn {
+                self.ownClientExpanded = false
+                self.clientIDDirty = false
+                self.clientSecretDirty = false
+                self.window.makeFirstResponder(nil)
+                self.cloud.setClient(id: nil, secret: nil)
+                self.clientIDField.stringValue = ""
+                self.clientSecretField.stringValue = ""
+            } else {
+                self.ownClientExpanded = true
+            }
+            self.refresh()
+        }
+    }
 
     private func changeShortcut(to combo: KeyCombo) {
         let previous = settings.captureHotKey

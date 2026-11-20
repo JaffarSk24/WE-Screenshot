@@ -2,7 +2,7 @@
 "Link copied" = "Ссылка скопирована";
 "Google sign-in did not work." = "Не удалось войти через Google.";
 "Google Drive is not set up yet." = "Google Drive ещё не настроен.";
-"Enter the ID and secret of your own Google OAuth client in Settings first." = "Сначала введите в настройках ID и секрет своего клиента Google OAuth.";
+"This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "В этой сборке вход в Google не настроен. Клиент Google OAuth можно указать в настройках.";
 "Open Settings" = "Открыть настройки";
 "Cancel" = "Отмена";
 "The screenshot was not uploaded." = "Скриншот не загружен.";
@@ -93,9 +93,11 @@
 "Save Retina screenshots at half size" = "Сохранять скриншоты Retina вдвое меньше";
 "Open the link after upload" = "Открывать ссылку после загрузки";
 "Sign In…" = "Войти…";
+"Use my own Google OAuth client" = "Использовать свой клиент Google OAuth";
 "Settings" = "Настройки";
 "Shortcut:" = "Сочетание клавиш:";
 "Image format:" = "Формат изображения:";
+"Screenshots are uploaded to the folder “WE Screenshot” in your own Google Drive." = "Скриншоты загружаются в папку «WE Screenshot» на вашем Google Drive.";
 "Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once." = "Загрузки попадают в папку «WE Screenshot» в вашем личном Google Drive. Google требует, чтобы каждый пользователь приложения с открытым кодом один раз создал личный клиент OAuth.";
 "How to get these…" = "Как это получить…";
 "Waiting for the browser…" = "Ожидание браузера…";
@@ -105,3 +107,6 @@
 "Sign Out" = "Выйти";
 "Signed out" = "Вы вышли";
 "Not set up" = "Не настроено";
+"Stop using your own Google OAuth client?" = "Перестать использовать свой клиент Google OAuth?";
+"Your own client is removed and you are signed out. You can sign in again with the built-in client." = "Ваш клиент будет удалён, и вы выйдете из аккаунта. Войти снова можно со встроенным клиентом.";
+"Remove" = "Удалить";

@@ -58,7 +58,14 @@ Mouse: with no tool active, drag on the dimmed area to start a selection, drag i
 
 ## Google Drive setup
 
-Uploading and "Search similar images" need your own Google OAuth client. Google's OAuth policies forbid publishing client credentials in a public repository, so this app ships without any and every user creates a personal client once. It takes a few minutes.
+Uploading and "Search similar images" need a Google OAuth client. If the build you use has one built in, there is nothing to set up: open Settings, press Sign In and approve access in your browser.
+
+The rest of this section is for a build without a built-in client, for people who build the app themselves, and for those who prefer their own client. Google's OAuth policies forbid publishing client credentials in a public repository, so the source code contains none. There are two ways to supply a client:
+
+- At build time: copy `google-client.local.example` to `google-client.local`, fill in the two values and run `tools/build_app.sh`. The script writes them into the built app only; the file is ignored by git. Every user of that build then just presses Sign In.
+- In the app: tick "Use my own Google OAuth client" in Settings (in a build without a built-in client the fields are always shown), paste the Client ID and the Client secret and press Save.
+
+Creating a client takes a few minutes. Personal mode, described first, works only for the Google account that created it; a client meant to be built into an app for other people needs the External audience described after the steps.
 
 1. Open https://console.cloud.google.com/auth/overview/personal and sign in with the Google account whose Drive should receive the screenshots. This is the quick setup page for Personal mode: the app works only for this one account, but needs no Google verification, shows no unverified-app warning and does not sign you out every 7 days.
 2. Leave the project field on "Create a new project" (the default name is personal-mode-app, you can rename it to WE Screenshot) or pick a project you already created in Personal mode.
@@ -68,7 +75,7 @@ Uploading and "Search similar images" need your own Google OAuth client. Google'
 6. In the "OAuth client created" window copy the Client ID and the Client secret, or press Download JSON and keep the file somewhere safe. Google does not show the full secret again after you close the window.
 7. Enable the Google Drive API: open https://console.cloud.google.com/apis/library/drive.googleapis.com, check that the same project is selected at the top and press Enable. This step is required if the quick setup reported that some APIs could not be enabled automatically.
 8. If the Google Auth Platform menu has a Data Access section, open it, press Add or remove scopes, tick `https://www.googleapis.com/auth/drive.file`, then Update and Save. This is a precaution: Google's documentation does not say whether it is required in Personal mode.
-9. In WE Screenshot open Settings, paste the Client ID and the Client secret into the Google Drive box and press Save, then press Sign In. Your browser opens, you approve access, and the app shows the account it is signed in as. The "How to get these" button in Settings opens this section.
+9. Put the two values into `google-client.local` and rebuild, or paste them into the Google Drive box in Settings and press Save. Then press Sign In: your browser opens, you approve access, and the app shows the account it is signed in as. The "How to get these" button in Settings opens this section.
 
 If Personal mode is not available (for example a Google Workspace account), use the fallback: create an ordinary project, in Google Auth Platform press Get started, enter the name WE Screenshot and your support e-mail, choose External as the audience, then in Audience press Publish app (status In production). In Clients press Create client, choose Desktop app and copy the Client ID and the Client secret. Do not leave the app in Testing status: in that status Google ends the sign in every 7 days.
 
@@ -100,7 +107,7 @@ tools/build_app.sh          # universal app, signed, zipped into build/ and inst
 tools/build_app.sh --no-install   # the same without installing
 ```
 
-`tools/build_app.sh` builds an arm64 and an x86_64 binary, joins them with `lipo`, signs the bundle with the certificate "WE Screenshot Local Signing" (override the name with `SIGN_IDENTITY`) and packs `build/WE-Screenshot-<version>.zip`. Without the certificate it signs ad hoc and warns you.
+`tools/build_app.sh` builds an arm64 and an x86_64 binary (set `JOBS=4` to limit the parallel compile jobs), joins them with `lipo`, adds the Google client from `google-client.local` when that file exists, signs the bundle with the certificate "WE Screenshot Local Signing" (override the name with `SIGN_IDENTITY`) and packs `build/WE-Screenshot-<version>.zip`. Without the certificate it signs ad hoc and warns you.
 
 The self-signed certificate matters: macOS ties the Screen Recording permission to the code signature, and the updater accepts a new version only if it satisfies the designated requirement of the running app. With an ad hoc signature the permission is asked for again after every rebuild, and installed copies refuse updates signed with another certificate.
 

@@ -2,7 +2,7 @@
 "Link copied" = "Link copied";
 "Google sign-in did not work." = "Google sign-in did not work.";
 "Google Drive is not set up yet." = "Google Drive is not set up yet.";
-"Enter the ID and secret of your own Google OAuth client in Settings first." = "Enter the ID and secret of your own Google OAuth client in Settings first.";
+"This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings.";
 "Open Settings" = "Open Settings";
 "Cancel" = "Cancel";
 "The screenshot was not uploaded." = "The screenshot was not uploaded.";
@@ -93,9 +93,11 @@
 "Save Retina screenshots at half size" = "Save Retina screenshots at half size";
 "Open the link after upload" = "Open the link after upload";
 "Sign In…" = "Sign In…";
+"Use my own Google OAuth client" = "Use my own Google OAuth client";
 "Settings" = "Settings";
 "Shortcut:" = "Shortcut:";
 "Image format:" = "Image format:";
+"Screenshots are uploaded to the folder “WE Screenshot” in your own Google Drive." = "Screenshots are uploaded to the folder “WE Screenshot” in your own Google Drive.";
 "Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once." = "Uploads go to the folder “WE Screenshot” in your own Google Drive. Google requires every user of an open-source app to create a personal OAuth client once.";
 "How to get these…" = "How to get these…";
 "Waiting for the browser…" = "Waiting for the browser…";
@@ -105,3 +107,6 @@
 "Sign Out" = "Sign Out";
 "Signed out" = "Signed out";
 "Not set up" = "Not set up";
+"Stop using your own Google OAuth client?" = "Stop using your own Google OAuth client?";
+"Your own client is removed and you are signed out. You can sign in again with the built-in client." = "Your own client is removed and you are signed out. You can sign in again with the built-in client.";
+"Remove" = "Remove";

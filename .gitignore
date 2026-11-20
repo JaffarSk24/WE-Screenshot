@@ -6,3 +6,4 @@ build.nosync/
 *.p12
 *.xcodeproj
 .DS_Store
+google-client.local
