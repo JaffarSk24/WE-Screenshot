@@ -26,8 +26,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var skipNormalLaunch = false
     private var captureTestPrefix: String?
-    private var hotKeyTaken = false
     private var isPreparingCapture = false
+    /// Set while one of the shell's own alerts runs, so repeated presses of the
+    /// hotkey cannot stack alerts.
+    private var isShowingAlert = false
+    private var didRequestPermission = false
+
+    /// The wanted shortcut is not registered; always the result of the last attempt.
+    private var hotKeyTaken: Bool { !hotKeys.isActive }
 
     // MARK: Launch
 
@@ -67,6 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         actions = ScreenshotActions(settings: settings, cloud: cloud, notifier: notifier)
         updater = Updater(settings: settings)
         overlay = OverlayController(settings: settings)
+        // The update alert must not come up under the frozen overlay or on top
+        // of another modal session.
+        updater.canPresent = { [weak self] in !(self?.overlay.isActive ?? false) && NSApp.modalWindow == nil }
+
+        NSApp.mainMenu = AppDelegate.buildMainMenu(target: self)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
@@ -82,7 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         notifier.start()
         hotKeys.onPress = { [weak self] in self?.startCapture() }
-        hotKeyTaken = !hotKeys.register(settings.captureHotKey)
+        // A refused shortcut stays in the settings; it is retried when the
+        // menu opens and when the app becomes active.
+        hotKeys.register(settings.captureHotKey)
 
         cloud.onNeedsSetup = { [weak self] in self?.showSettings() }
         cloud.onStateChange = { [weak self] in self?.settingsWindow?.cloudStateChanged() }
@@ -100,8 +113,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !skipNormalLaunch, notifier != nil else { return }
+        hotKeys.retry()
+        settingsWindow?.refresh()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hotKeys.unregister()
+    }
+
+    /// The menu bar of an accessory app is never visible, but key equivalents
+    /// (Cmd+V in a text field, Cmd+W, Cmd+Q) only work through a main menu.
+    private static func buildMainMenu(target: AppDelegate) -> NSMenu {
+        let main = NSMenu()
+
+        let appMenu = NSMenu()
+        let prefs = NSMenuItem(title: L("Settings…"), action: #selector(showSettingsAction), keyEquivalent: ",")
+        prefs.target = target
+        appMenu.addItem(prefs)
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: L("Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        // Nil targets: the actions travel the responder chain to the field editor.
+        let edit = NSMenu(title: L("Edit"))
+        edit.addItem(NSMenuItem(title: L("Undo"), action: Selector(("undo:")), keyEquivalent: "z"))
+        let redo = NSMenuItem(title: L("Redo"), action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: L("Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: L("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: L("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: L("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        let editItem = NSMenuItem()
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        let window = NSMenu(title: L("Window"))
+        window.addItem(NSMenuItem(title: L("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        let windowItem = NSMenuItem()
+        windowItem.submenu = window
+        main.addItem(windowItem)
+        return main
     }
 
     private static func anotherInstanceRunning() -> Bool {
@@ -145,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func settingsDidChange() {
         let wanted = settings.captureHotKey
         if hotKeys.current != wanted {
-            hotKeyTaken = !hotKeys.register(wanted)
+            hotKeys.register(wanted)
         }
         settingsWindow?.refresh()
     }
@@ -156,19 +213,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let previous = settings.captureHotKey
         if hotKeys.register(combo) {
             settings.captureHotKey = combo
-            hotKeyTaken = false
             return true
         }
-        _ = hotKeys.register(previous)
+        // If the previous one fails too, isActive says so and it is retried later.
+        hotKeys.register(previous)
         return false
     }
 
     // MARK: Capture flow
 
     @objc private func startCapture() {
-        guard !overlay.isActive, !isPreparingCapture else { return }
+        guard !overlay.isActive, !isPreparingCapture, !isShowingAlert else { return }
+        // During a modal session (an alert, a save or print panel) the overlay
+        // windows would get no events and hide the panel under a frozen screen.
+        if let modal = NSApp.modalWindow {
+            NSSound.beep()
+            modal.orderFrontRegardless()
+            return
+        }
         guard ScreenRecordingPermission.isGranted else {
-            ScreenRecordingPermission.request()
+            if !didRequestPermission {
+                didRequestPermission = true
+                ScreenRecordingPermission.request()
+            }
             showPermissionAlert()
             return
         }
@@ -177,6 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defer { isPreparingCapture = false }
             do {
                 let shots = try await capture.captureAllDisplays()
+                // A modal session may have started while the capture ran.
+                guard NSApp.modalWindow == nil else { NSSound.beep(); return }
                 overlay.begin(snapshots: shots) { [weak self] result in
                     if let result { self?.actions.perform(result.action, on: result.screenshot) }
                 }
@@ -189,6 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPermissionAlert() {
+        guard !isShowingAlert else { return }
+        isShowingAlert = true
+        defer { isShowingAlert = false }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = L("WE Screenshot needs the Screen Recording permission")
@@ -201,6 +273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showErrorAlert(_ error: Error) {
+        guard !isShowingAlert else { return }
+        isShowingAlert = true
+        defer { isShowingAlert = false }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = L("The screenshot could not be taken")
@@ -223,6 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
         let combo = settings.captureHotKey
+        hotKeys.retry()
 
         let shot = captureItem(combo)
         shot.isEnabled = !overlay.isActive
@@ -316,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func signIn() {
         let cloud = self.cloud!
-        Task { @MainActor in await cloud.signIn() }
+        Task { @MainActor in await SignInProgress.run(cloud) }
     }
 
     @objc private func signOut() {
@@ -360,7 +436,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 settings: settings, cloud: cloud, updater: updater,
                 applyHotKey: { [weak self] combo in self?.applyHotKey(combo) ?? false },
                 pauseHotKey: { [weak self] in self?.hotKeys.pause() },
-                resumeHotKey: { [weak self] in self?.hotKeys.resume() })
+                resumeHotKey: { [weak self] in self?.hotKeys.resume() },
+                isHotKeyActive: { [weak self] in self?.hotKeys.isActive ?? true })
         }
         settingsWindow?.show()
     }

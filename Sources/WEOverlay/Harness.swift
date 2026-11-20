@@ -97,7 +97,34 @@ public final class OverlayHarness {
     /// Escape in the editor.
     public func editorEscape() { session.editor?.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
 
+    /// A Command shortcut sent to the text editor as a real key event.
+    /// False when there is no editor or it did not take the key.
+    @discardableResult
+    public func editorKey(code: UInt16, characters: String, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard let editor = session.editor, let window = editor.window,
+              let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                                           timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                           characters: characters, charactersIgnoringModifiers: characters,
+                                           isARepeat: false, keyCode: code) else { return false }
+        return editor.performKeyEquivalent(with: event)
+    }
+
+    /// The selected range of the text editor, if one is open.
+    public var editorSelection: NSRange? { session.editor?.selectedRange() }
+    /// The text in the editor, if one is open.
+    public var editorText: String? { session.editor?.string }
+
     // MARK: State
+
+    /// Area (in points squared) that live drawing updates marked for redraw
+    /// on the display since the last reset.
+    public func invalidatedPreviewArea(display: Int) -> CGFloat { session.views[display].invalidatedPreviewArea }
+    public func resetInvalidatedPreviewArea(display: Int) { session.views[display].invalidatedPreviewArea = 0 }
+
+    /// The display the controller makes key for a mouse location.
+    public static func keyDisplayIndex(mouse: CGPoint, frames: [CGRect]) -> Int {
+        OverlayController.displayIndex(at: mouse, in: frames)
+    }
 
     public var tool: Tool? { session.tool }
     public var annotations: [Annotation] { session.annotations.items }

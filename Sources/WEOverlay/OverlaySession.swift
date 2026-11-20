@@ -30,6 +30,8 @@ final class OverlaySession: NSObject {
     private(set) var activeIndex: Int?
     private(set) var dragKind: DragKind = .none
     private(set) var isMoving = false
+    /// The handle being dragged, so the resize cursor stays during the drag.
+    private var resizeHandle: SelectionHandle?
     private var dragIndex = 0
     private var gesture: AnnotationGesture?
     private var stash: Stash?
@@ -77,6 +79,7 @@ final class OverlaySession: NSObject {
         case .handle(let handle):
             view.selection.beginResize(handle, at: point)
             dragKind = .selection
+            resizeHandle = handle
         case .inside:
             if let tool {
                 if tool == .text {
@@ -151,6 +154,7 @@ final class OverlaySession: NSObject {
         }
         dragKind = .none
         isMoving = false
+        resizeHandle = nil
         refreshAll()
     }
 
@@ -158,6 +162,7 @@ final class OverlaySession: NSObject {
         guard views.indices.contains(index) else { return .arrow }
         let view = views[index]
         if dragKind == .selection && isMoving { return .closedHand }
+        if dragKind == .selection, let resizeHandle { return .resize(resizeHandle) }
         if view.panelsContain(point) { return .arrow }
         guard activeIndex == index, dragKind != .selection else { return .crosshair }
         switch view.selection.hitTest(point, tolerance: OverlayStyle.handleTolerance) {

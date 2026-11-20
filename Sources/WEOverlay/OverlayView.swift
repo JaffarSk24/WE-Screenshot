@@ -105,7 +105,7 @@ final class OverlayView: NSView {
 
     /// Shows the drawing in progress. Only the area it touches is redrawn.
     func showPreview(_ annotation: Annotation?) {
-        let old = preview.annotations.first.map(OverlayLayout.paintBounds(of:)) ?? .null
+        let previous = preview.annotations.first
         guard let annotation, let rect = selection.rect else {
             preview.annotations = []
             preview.isHidden = true
@@ -123,9 +123,13 @@ final class OverlayView: NSView {
             return
         }
         preview.annotations = [annotation]
-        let dirty = old.union(OverlayLayout.paintBounds(of: annotation))
+        let dirty = OverlayLayout.changedBounds(from: previous, to: annotation)
+        invalidatedPreviewArea += dirty.isNull ? 0 : dirty.width * dirty.height
         preview.setNeedsDisplay(dirty.offsetBy(dx: -preview.offset.x, dy: -preview.offset.y))
     }
+
+    /// Total area marked dirty by live drawing updates, for the harness.
+    var invalidatedPreviewArea: CGFloat = 0
 
     func installEditor(_ editor: NSView) {
         addSubview(editor, positioned: .below, relativeTo: toolsPanel)

@@ -25,7 +25,9 @@ public final class OverlayController {
     private var previousApp: NSRunningApplication?
     private var screenTarget: SelectorTarget?
     private var colorTarget: SelectorTarget?
-    private var savedColorPanel: (level: NSWindow.Level, behavior: NSWindow.CollectionBehavior)?
+    private var modalTarget: SelectorTarget?
+    private var savedColorPanel: (level: NSWindow.Level, behavior: NSWindow.CollectionBehavior,
+                                  showsAlpha: Bool, isContinuous: Bool)?
 
     public init(settings: SettingsStore) {
         self.settings = settings
@@ -42,7 +44,9 @@ public final class OverlayController {
     /// Calling begin while active does nothing.
     public func begin(snapshots: [DisplaySnapshot], completion: @escaping (OverlayResult?) -> Void) {
         guard session == nil else { return }
-        guard !snapshots.isEmpty else {
+        // Over a modal session (an alert, a save panel) the overlay would get
+        // no events and the modal window would be hidden under it.
+        guard !snapshots.isEmpty, NSApp.modalWindow == nil else {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -67,9 +71,28 @@ public final class OverlayController {
                                                object: nil)
         screenTarget = target
 
+        // Safety net: if a modal session starts anyway, close the overlay so
+        // the user is not stuck behind a frozen screen.
+        let modal = SelectorTarget { [weak self] sender in
+            guard let window = (sender as? Notification)?.object as? NSWindow,
+                  !(window is OverlayWindow), !(window is NSColorPanel) else { return }
+            if NSApp.modalWindow != nil {
+                self?.cancel()
+                return
+            }
+            // The modal state may be entered just after the window becomes
+            // key; the main queue also runs in the modal run loop mode.
+            DispatchQueue.main.async { [weak self] in
+                if NSApp.modalWindow != nil { self?.cancel() }
+            }
+        }
+        NotificationCenter.default.addObserver(modal, selector: #selector(SelectorTarget.fire(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
+        modalTarget = modal
+
         (NSApp as LegacyActivation).activate(ignoringOtherApps: true)
         let mouse = NSEvent.mouseLocation
-        let keyIndex = snapshots.firstIndex { $0.display.frame.contains(mouse) } ?? 0
+        let keyIndex = OverlayController.displayIndex(at: mouse, in: snapshots.map(\.display.frame))
         session.mouseIndex = keyIndex
         for (index, window) in windows.enumerated() where index != keyIndex {
             window.orderFrontRegardless()
@@ -105,6 +128,8 @@ public final class OverlayController {
     private func tearDown() {
         if let screenTarget { NotificationCenter.default.removeObserver(screenTarget) }
         screenTarget = nil
+        if let modalTarget { NotificationCenter.default.removeObserver(modalTarget) }
+        modalTarget = nil
         restoreColorPanel()
         session?.invalidate()
         for window in windows {
@@ -121,13 +146,26 @@ public final class OverlayController {
         previousApp = nil
     }
 
+    /// The display under the mouse, in global AppKit coordinates. On the top
+    /// row of a display the mouse y equals frame.maxY, which CGRect.contains
+    /// excludes, so the edges count too; otherwise the nearest display wins.
+    static func displayIndex(at mouse: CGPoint, in frames: [CGRect]) -> Int {
+        if let index = frames.firstIndex(where: { NSMouseInRect(mouse, $0, false) }) { return index }
+        func distance(_ r: CGRect) -> CGFloat {
+            let dx = max(r.minX - mouse.x, 0, mouse.x - r.maxX)
+            let dy = max(r.minY - mouse.y, 0, mouse.y - r.maxY)
+            return dx * dx + dy * dy
+        }
+        return frames.indices.min { distance(frames[$0]) < distance(frames[$1]) } ?? 0
+    }
+
     // MARK: Colour panel
 
     private func showColorPanel() {
         guard let session else { return }
         let panel = NSColorPanel.shared
         if savedColorPanel == nil {
-            savedColorPanel = (panel.level, panel.collectionBehavior)
+            savedColorPanel = (panel.level, panel.collectionBehavior, panel.showsAlpha, panel.isContinuous)
         }
         panel.setTarget(nil)
         panel.setAction(nil)
@@ -154,6 +192,8 @@ public final class OverlayController {
         panel.orderOut(nil)
         panel.level = saved.level
         panel.collectionBehavior = saved.behavior
+        panel.showsAlpha = saved.showsAlpha
+        panel.isContinuous = saved.isContinuous
         savedColorPanel = nil
         colorTarget = nil
     }

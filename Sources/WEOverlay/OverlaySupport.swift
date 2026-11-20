@@ -31,7 +31,16 @@ enum KeyCommand: Equatable {
 
     // ANSI positions, used when the layout does not produce a Latin letter
     // (for example a Cyrillic layout), so the shortcuts still work.
-    private static let ansiLetters: [UInt16: String] = [0: "a", 1: "s", 2: "d", 6: "z", 7: "x", 8: "c", 35: "p"]
+    private static let ansiLetters: [UInt16: String] = [0: "a", 1: "s", 2: "d", 6: "z", 7: "x", 8: "c", 9: "v", 35: "p"]
+
+    /// The Latin letter of a shortcut key: the typed character when it is a
+    /// Latin letter, otherwise the letter at that ANSI position. Shared with
+    /// the text editor so both resolve shortcuts the same way.
+    static func shortcutLetter(keyCode: UInt16, characters: String?) -> String {
+        let letter = characters?.lowercased() ?? ""
+        let isLatin = letter.count == 1 && letter.unicodeScalars.allSatisfy { $0.value >= 97 && $0.value <= 122 }
+        return isLatin ? letter : (ansiLetters[keyCode] ?? "")
+    }
 
     static func from(event: NSEvent) -> KeyCommand? {
         guard event.type == .keyDown else { return nil }
@@ -59,10 +68,7 @@ enum KeyCommand: Equatable {
             break
         }
         guard flags == [.command] else { return nil }
-        var letter = characters?.lowercased() ?? ""
-        let isLatin = letter.count == 1 && letter.unicodeScalars.allSatisfy { $0.value >= 97 && $0.value <= 122 }
-        if !isLatin { letter = ansiLetters[keyCode] ?? "" }
-        switch letter {
+        switch shortcutLetter(keyCode: keyCode, characters: characters) {
         case "x": return .cancel
         case "c": return .action(.copy)
         case "s": return .action(.quickSave)
@@ -203,6 +209,26 @@ enum OverlayLayout {
         origin.x = min(max(origin.x, bounds.minX), max(bounds.minX, bounds.maxX - size.width))
         origin.y = min(max(origin.y, bounds.minY), max(bounds.minY, bounds.maxY - size.height))
         return CGRect(origin: origin, size: size)
+    }
+
+    /// The area that differs between two consecutive states of a drawing in
+    /// progress. A freehand stroke only changes at its end: adding a point
+    /// turns the last straight piece into a curve that starts half a segment
+    /// before the previous point, so the last three points cover it. Redrawing
+    /// the whole stroke's bounds instead gets slower with every point.
+    static func changedBounds(from previous: Annotation?, to annotation: Annotation) -> CGRect {
+        let old = previous.map(paintBounds(of:)) ?? .null
+        switch (previous?.shape, annotation.shape) {
+        case (.pencil(let before)?, .pencil(let after)), (.marker(let before)?, .marker(let after)):
+            guard !before.isEmpty, after.count >= before.count, let first = after.suffix(3).first else { break }
+            var rect = CGRect(origin: first, size: .zero)
+            for p in after.suffix(2) { rect = rect.union(CGRect(origin: p, size: .zero)) }
+            let extra = annotation.lineWidth / 2 + 2
+            return rect.insetBy(dx: -extra, dy: -extra)
+        default:
+            break
+        }
+        return old.union(paintBounds(of: annotation))
     }
 
     /// The area an annotation can paint, for partial redraws of the preview.

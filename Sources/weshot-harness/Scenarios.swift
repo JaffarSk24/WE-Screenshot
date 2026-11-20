@@ -363,6 +363,57 @@ func runLogicChecks() {
     h2.press("close")
     check(h2.finishCount == 1 && h2.finishedAction == .some(nil), "close cancels")
 
+    // Live drawing redraws only the end of a long stroke, not its whole bounds.
+    let big = DisplaySnapshot(display: DisplayInfo(id: 3, frame: CGRect(x: 0, y: 0, width: 1600, height: 1000), scale: 1),
+                              image: makeDesktop(width: 1600, height: 1000, scale: 1))
+    for tool in ["pencil", "marker"] {
+        let h3 = OverlayHarness(settings: settings, snapshots: [big])
+        h3.drag(display: 0, through: [CGPoint(x: 20, y: 20), CGPoint(x: 1580, y: 980)])
+        h3.press(tool)
+        var stroke: [CGPoint] = []
+        for i in 0..<600 {
+            // A zigzag that soon spans the whole selection.
+            let x = 40 + CGFloat(i % 60) * 25 + CGFloat(i / 60)
+            let y = (i / 60) % 2 == 0 ? 40 + CGFloat(i % 60) * 15 : 940 - CGFloat(i % 60) * 15
+            stroke.append(CGPoint(x: x, y: y))
+        }
+        h3.mouseDown(display: 0, at: stroke[0])
+        h3.mouseDragged(to: stroke[1])
+        h3.resetInvalidatedPreviewArea(display: 0)
+        for p in stroke.dropFirst(2) { h3.mouseDragged(to: p) }
+        let perMove = h3.invalidatedPreviewArea(display: 0) / CGFloat(stroke.count - 2)
+        let selectionArea: CGFloat = 1560 * 960
+        check(perMove > 0 && perMove < selectionArea * 0.01,
+              "\(tool): live drawing redraws \(Int(perMove)) pt2 per move (limit \(Int(selectionArea * 0.01)))")
+        h3.mouseUp(at: stroke[stroke.count - 1])
+        check(h3.annotations.count == 1, "\(tool): long stroke committed")
+    }
+
+    // Editor shortcuts work by key position on a Cyrillic layout.
+    let h4 = OverlayHarness(settings: settings, snapshots: [a])
+    h4.drag(display: 0, through: [CGPoint(x: 20, y: 20), CGPoint(x: 500, y: 350)])
+    h4.press("text")
+    h4.mouseDown(display: 0, at: CGPoint(x: 60, y: 60))
+    h4.mouseUp(at: CGPoint(x: 60, y: 60))
+    h4.type("hello")
+    check(h4.editorKey(code: 0, characters: "\u{444}", modifiers: .command)
+          && h4.editorSelection == NSRange(location: 0, length: 5), "editor: command-A on a Cyrillic layout selects all")
+    // Copy, cut and paste are left out: they would touch the real clipboard.
+    check(h4.editorKey(code: 6, characters: "\u{44f}", modifiers: .command), "editor: command-Z on a Cyrillic layout taken")
+    check(!h4.editorKey(code: 1, characters: "\u{44b}", modifiers: .command), "editor: other letters are left alone")
+    h4.editorEscape()
+
+    // The key window is chosen inclusively at the top edge of a display.
+    let lower = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let upper = CGRect(x: 0, y: 900, width: 1440, height: 900)
+    let right = CGRect(x: 1440, y: 0, width: 1000, height: 800)
+    check(OverlayHarness.keyDisplayIndex(mouse: CGPoint(x: 700, y: 900), frames: [upper, lower]) == 1,
+          "top row of the lower display picks the lower display")
+    check(OverlayHarness.keyDisplayIndex(mouse: CGPoint(x: 700, y: 1800), frames: [lower, upper]) == 1,
+          "top row of the upper display picks the upper display")
+    check(OverlayHarness.keyDisplayIndex(mouse: CGPoint(x: 2440, y: 400), frames: [lower, right]) == 1,
+          "right edge picks the nearest display")
+
     // Key mapping.
     let cases: [(UInt16, String?, NSEvent.ModifierFlags, String)] = [
         (8, "c", .command, "copy"), (8, "\u{441}", .command, "copy"), (1, "s", .command, "quickSave"),

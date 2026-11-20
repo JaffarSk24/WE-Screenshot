@@ -4,6 +4,23 @@ import WECloud
 import WECore
 import WEActions
 
+/// Knows whether a Google sign-in started from this app is waiting for the
+/// browser, so the settings window can offer to cancel it.
+@MainActor
+enum SignInProgress {
+    private(set) static var isWaiting = false
+    static var onChange: (() -> Void)?
+
+    static func run(_ cloud: CloudCoordinator) async {
+        guard !isWaiting else { return }
+        isWaiting = true
+        onChange?()
+        await cloud.signIn()
+        isWaiting = false
+        onChange?()
+    }
+}
+
 /// A button that records a keyboard shortcut: click it, then press the keys.
 @MainActor
 final class ShortcutRecorderButton: NSButton {
@@ -40,7 +57,10 @@ final class ShortcutRecorderButton: NSButton {
         window?.makeFirstResponder(self)
     }
 
-    private func stopRecording() {
+    /// The only way recording ends, so the hotkey is always resumed (through
+    /// onRecordingChange) on every path: a combination, Escape, lost focus,
+    /// window or app deactivation, or the window closing.
+    func stopRecording() {
         guard isRecording else { return }
         isRecording = false
         updateTitle()
@@ -51,6 +71,21 @@ final class ShortcutRecorderButton: NSButton {
         stopRecording()
         return super.resignFirstResponder()
     }
+
+    // A window that resigns key keeps its first responder, so focus loss to
+    // another window or app has to be watched separately.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        stopRecording()
+        let center = NotificationCenter.default
+        center.removeObserver(self)
+        guard let newWindow else { return }
+        center.addObserver(self, selector: #selector(focusLost), name: NSWindow.didResignKeyNotification, object: newWindow)
+        center.addObserver(self, selector: #selector(focusLost), name: NSWindow.willCloseNotification, object: newWindow)
+        center.addObserver(self, selector: #selector(focusLost), name: NSApplication.didResignActiveNotification, object: nil)
+    }
+
+    @objc private func focusLost(_ notification: Notification) { stopRecording() }
 
     // Shortcuts with Command would otherwise be taken by the menu bar first.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -86,7 +121,7 @@ final class ShortcutRecorderButton: NSButton {
 }
 
 @MainActor
-final class SettingsWindowController: NSObject, NSWindowDelegate {
+final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     private let settings: SettingsStore
     private let cloud: CloudCoordinator
     private let updater: Updater
@@ -94,6 +129,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let applyHotKey: (KeyCombo) -> Bool
     private let pauseHotKey: () -> Void
     private let resumeHotKey: () -> Void
+    private let isHotKeyActive: () -> Bool
+
+    // Unsaved edits in the credential fields; refresh() leaves those fields alone.
+    private var clientIDDirty = false
+    private var clientSecretDirty = false
 
     private let window: NSWindow
     private let recorder = ShortcutRecorderButton(frame: .zero)
@@ -111,13 +151,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     init(settings: SettingsStore, cloud: CloudCoordinator, updater: Updater,
          applyHotKey: @escaping (KeyCombo) -> Bool,
-         pauseHotKey: @escaping () -> Void, resumeHotKey: @escaping () -> Void) {
+         pauseHotKey: @escaping () -> Void, resumeHotKey: @escaping () -> Void,
+         isHotKeyActive: @escaping () -> Bool) {
         self.settings = settings
         self.cloud = cloud
         self.updater = updater
         self.applyHotKey = applyHotKey
         self.pauseHotKey = pauseHotKey
         self.resumeHotKey = resumeHotKey
+        self.isHotKeyActive = isHotKeyActive
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
@@ -128,10 +170,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NotificationCenter.default.addObserver(forName: SettingsStore.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refresh() }
         }
+        SignInProgress.onChange = { [weak self] in self?.refresh() }
     }
 
     /// Shows the window (the single instance) and brings the app forward.
     func show() {
+        if !window.isVisible {
+            // Opened fresh: show what is stored.
+            clientIDDirty = false
+            clientSecretDirty = false
+        }
         refresh()
         if !window.isVisible { window.center() }
         NSApp.activate(ignoringOtherApps: true)
@@ -142,9 +190,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func cloudStateChanged() { refresh() }
 
     func windowWillClose(_ notification: Notification) {
-        // Closing while recording ends the recording through the responder chain,
-        // but make sure the hotkey is back in any case.
-        if recorder.isRecording { window.makeFirstResponder(nil) }
+        recorder.stopRecording()
+        clientIDDirty = false
+        clientSecretDirty = false
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        recorder.stopRecording()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        if field === clientIDField { clientIDDirty = true }
+        if field === clientSecretField { clientSecretDirty = true }
     }
 
     // MARK: Layout
@@ -236,6 +294,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         clientIDField.placeholderString = "xxxx.apps.googleusercontent.com"
         clientSecretField.placeholderString = "GOCSPX-…"
         for field in [clientIDField, clientSecretField] {
+            field.delegate = self
             field.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
         }
         let fields = NSGridView(views: [
@@ -295,9 +354,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         openLinkCheck.state = settings.openLinkAfterUpload ? .on : .off
         loginCheck.state = SMAppService.mainApp.status == .enabled ? .on : .off
         updatesCheck.state = settings.autoCheckUpdates ? .on : .off
-        if !isEditing(clientIDField) { clientIDField.stringValue = settings.googleClientID ?? "" }
-        if !isEditing(clientSecretField) { clientSecretField.stringValue = cloud.clientSecret ?? "" }
-        if cloud.isSignedIn {
+        if !clientIDDirty && !isEditing(clientIDField) { clientIDField.stringValue = settings.googleClientID ?? "" }
+        if !clientSecretDirty && !isEditing(clientSecretField) { clientSecretField.stringValue = cloud.clientSecret ?? "" }
+        if SignInProgress.isWaiting {
+            driveStatus.stringValue = L("Waiting for the browser…")
+            signButton.title = L("Cancel Sign-In")
+            signButton.isEnabled = true
+        } else if cloud.isSignedIn {
             driveStatus.stringValue = String(format: L("Signed in as %@"), settings.googleAccountLabel ?? L("your Google account"))
             signButton.title = L("Sign Out")
             signButton.isEnabled = !cloud.isBusy
@@ -312,8 +375,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func changeShortcut(to combo: KeyCombo) {
         let previous = settings.captureHotKey
-        if combo == previous {
+        // The same combination is tried again when it is not registered now
+        // (it was taken, and another app may have released it).
+        if combo == previous && isHotKeyActive() {
             recorder.combo = previous
+            shortcutNote.stringValue = ""
             return
         }
         if applyHotKey(combo) {
@@ -326,7 +392,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func resetShortcut() {
-        if recorder.isRecording { window.makeFirstResponder(nil) }
+        recorder.stopRecording()
         changeShortcut(to: .defaultCapture)
     }
 
@@ -361,6 +427,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func saveClient() {
         let id = clientIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = clientSecretField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        clientIDDirty = false
+        clientSecretDirty = false
         cloud.setClient(id: id.isEmpty ? nil : id, secret: secret.isEmpty ? nil : secret)
         window.makeFirstResponder(nil)
         refresh()
@@ -368,14 +436,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func signClicked() {
         let cloud = self.cloud
-        if cloud.isSignedIn {
+        if SignInProgress.isWaiting {
+            cloud.cancelSignIn()
+        } else if cloud.isSignedIn {
             Task { @MainActor [weak self] in
                 await cloud.signOut()
                 self?.refresh()
             }
         } else {
             Task { @MainActor [weak self] in
-                await cloud.signIn()
+                await SignInProgress.run(cloud)
                 self?.refresh()
             }
         }

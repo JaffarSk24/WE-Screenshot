@@ -21,6 +21,12 @@ public final class CloudCoordinator {
     private var stack: Stack?
     /// nil outer value: not read from the keychain yet.
     private var secretCache: String??
+    /// The running Google sign-in (the browser is open), if any.
+    private var signInTask: Task<Result<OAuthTokens, Error>, Never>?
+    /// Bumped by setClient and signOut: a sign-in started before is stale.
+    private var authEpoch = 0
+    /// Identifies the operation that owns isBusy; cancelling releases it.
+    private var busyToken = 0
 
     public init(settings: SettingsStore, notifier: Notifier) {
         self.settings = settings
@@ -43,7 +49,12 @@ public final class CloudCoordinator {
     /// The stored client secret (kept in the keychain); nil when not set.
     public var clientSecret: String? {
         if let cached = secretCache { return cached }
-        let value = ActionRules.normalized((try? keychain.string(for: Self.secretAccount)) ?? nil)
+        // Only a definite answer is cached (a secret or "no item"); on an
+        // error the next access tries again.
+        guard let stored = try? keychain.string(for: Self.secretAccount) else {
+            return nil
+        }
+        let value = ActionRules.normalized(stored)
         secretCache = .some(value)
         return value
     }
@@ -56,12 +67,21 @@ public final class CloudCoordinator {
         let changed = ActionRules.clientChanged(oldID: settings.googleClientID, newID: newID,
                                                 oldSecret: clientSecret, newSecret: newSecret)
         guard changed else { return }
+        // The secret goes first, while a failure still changes nothing else.
+        do {
+            try keychain.set(newSecret, for: Self.secretAccount)
+        } catch {
+            Alerts.inform(L("The client secret could not be saved to the keychain."), error.localizedDescription)
+            return
+        }
+        // A pending sign-in belongs to the old client.
+        authEpoch += 1
+        cancelSignIn()
         // Tokens belong to the old client: forget them before the new one is in place.
         try? KeychainTokenStore().clear()
         settings.googleAccountLabel = nil
         settings.driveFolderID = nil
         settings.googleClientID = newID
-        try? keychain.set(newSecret, for: Self.secretAccount)
         secretCache = .some(newSecret)
         stack = nil
         onStateChange?()
@@ -75,6 +95,26 @@ public final class CloudCoordinator {
     /// True while an upload or a sign-in is running.
     public private(set) var isBusy = false {
         didSet { if isBusy != oldValue { onStateChange?() } }
+    }
+
+    /// Cancels a sign-in that waits for the browser; isBusy falls back to
+    /// false at once. Does nothing when no sign-in is running.
+    public func cancelSignIn() {
+        guard let task = signInTask else { return }
+        signInTask = nil
+        task.cancel()
+        busyToken += 1
+        isBusy = false
+    }
+
+    private func beginBusy() -> Int {
+        busyToken += 1
+        isBusy = true
+        return busyToken
+    }
+
+    private func endBusy(_ token: Int) {
+        if busyToken == token { isBusy = false }
     }
 
     private func currentStack() -> Stack? {
@@ -98,16 +138,18 @@ public final class CloudCoordinator {
     @discardableResult
     public func signIn() async -> Bool {
         guard !isBusy else { return isSignedIn }
-        isBusy = true
-        defer { isBusy = false }
+        let token = beginBusy()
+        defer { endBusy(token) }
         return await performSignIn()
     }
 
     /// Revokes the tokens at Google and forgets them.
     public func signOut() async {
+        authEpoch += 1
+        cancelSignIn()
         guard !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
+        let token = beginBusy()
+        defer { endBusy(token) }
         await currentStack()?.authorizer.signOut()
         // Also covers the case without a client: nothing stays behind.
         try? KeychainTokenStore().clear()
@@ -144,16 +186,34 @@ public final class CloudCoordinator {
             askToSetUp()
             return false
         }
-        do {
-            _ = try await stack.authorizer.signIn()
-        } catch CloudError.signInCancelled {
+        let epoch = authEpoch
+        let task = Task { () -> Result<OAuthTokens, Error> in
+            do { return .success(try await stack.authorizer.signIn()) } catch { return .failure(error) }
+        }
+        signInTask = task
+        let result = await task.value
+        if signInTask == task { signInTask = nil }
+        // The client changed or the user signed out meanwhile: whatever this
+        // attempt stored belongs to a client that is no longer in use.
+        if epoch != authEpoch {
+            if signInTask == nil {
+                try? KeychainTokenStore().clear()
+                settings.googleAccountLabel = nil
+            }
             return false
-        } catch {
+        }
+        switch result {
+        case .success:
+            break
+        case .failure(let error):
+            if error is CancellationError { return false }
+            if case CloudError.signInCancelled = error { return false }
             Alerts.inform(L("Google sign-in did not work."), error.localizedDescription)
             return false
         }
+        settings.googleAccountLabel = nil
         // The label is only for display; a failure here is not an error.
-        if let label = try? await stack.uploader.accountLabel() {
+        if let label = try? await stack.uploader.accountLabel(), epoch == authEpoch {
             settings.googleAccountLabel = label
         }
         onStateChange?()
@@ -172,8 +232,8 @@ public final class CloudCoordinator {
 
     private func performUpload(_ screenshot: FinishedScreenshot) async -> UploadResult? {
         guard !isBusy else { return nil }
-        isBusy = true
-        defer { isBusy = false }
+        let token = beginBusy()
+        defer { endBusy(token) }
 
         if !isConfigured || !isSignedIn {
             guard await performSignIn() else { return nil }

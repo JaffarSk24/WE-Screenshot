@@ -16,6 +16,11 @@ final class HotKeyCenter {
     /// The combination the app wants to be active (registered unless paused).
     private(set) var current: KeyCombo?
 
+    /// True when the wanted combination is registered with macOS, or when it is
+    /// only paused for recording. False after a failed registration, so the
+    /// menu can say the shortcut is taken; this always reflects the last attempt.
+    var isActive: Bool { current == nil || paused || hotKeyRef != nil }
+
     /// Called on the main thread when the hotkey is pressed.
     var onPress: (() -> Void)?
 
@@ -68,7 +73,17 @@ final class HotKeyCenter {
         if let combo = current { _ = registerNow(combo) }
     }
 
+    /// Tries again to register a wanted combination that macOS refused before
+    /// (another app may have released it since). Returns isActive.
+    @discardableResult
+    func retry() -> Bool {
+        if let combo = current, !paused, hotKeyRef == nil { _ = registerNow(combo) }
+        return isActive
+    }
+
     private func registerNow(_ combo: KeyCombo) -> Bool {
+        // Without the event handler a registered hotkey would never be heard.
+        guard handlerRef != nil else { return false }
         var ref: EventHotKeyRef?
         let id = EventHotKeyID(signature: HotKeyCenter.signature, id: HotKeyCenter.hotKeyID)
         let status = RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, id, GetApplicationEventTarget(), 0, &ref)

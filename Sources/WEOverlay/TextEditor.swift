@@ -10,6 +10,11 @@ final class AnnotationTextView: NSTextView {
     var onCommit: (() -> Void)?
     var onCancel: (() -> Void)?
 
+    // Typing undo stays with this editor, so a removed editor leaves nothing
+    // behind in the window's undo manager.
+    private let editorUndoManager = UndoManager()
+    override var undoManager: UndoManager? { editorUndoManager }
+
     static func make(origin: CGPoint, color: RGBAColor) -> AnnotationTextView {
         // An explicit TextKit 1 stack: its layout is what the metrics below assume.
         let storage = NSTextStorage()
@@ -129,7 +134,7 @@ final class AnnotationTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let key = KeyCommand.shortcutLetter(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers)
         if flags == [.command] {
             switch key {
             case "c": copy(nil); return true

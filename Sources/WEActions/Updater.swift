@@ -19,11 +19,18 @@ public final class Updater {
     private var timer: Timer?
     /// Bumped by every start(): a delayed check from an older start is ignored.
     private var generation = 0
+    /// Bumped by every start() and every check(): a postponed alert from an
+    /// older one is dropped.
+    private var checkEpoch = 0
     private var busy = false
 
     /// Text for the menu while an update is being downloaded; nil otherwise.
     public private(set) var status: String?
     public var onStatusChange: (() -> Void)?
+
+    /// Asked before an automatic check shows its alert; false postpones the
+    /// alert (the app returns false while the screenshot overlay is up).
+    public var canPresent: (() -> Bool)?
 
     public init(settings: SettingsStore) {
         self.settings = settings
@@ -40,6 +47,7 @@ public final class Updater {
         timer?.invalidate()
         timer = nil
         generation += 1
+        checkEpoch += 1
         guard settings.autoCheckUpdates else { return }
         let started = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
@@ -68,6 +76,8 @@ public final class Updater {
         guard !busy else { return }
         busy = true
         defer { busy = false }
+        checkEpoch += 1
+        let epoch = checkEpoch
         let release: ReleaseInfo?
         do {
             release = try await fetchLatest()
@@ -83,7 +93,34 @@ public final class Updater {
             return
         }
         if !userInitiated && settings.skippedVersion == release.version { return }
+        if !userInitiated && !canPresentNow() {
+            postpone(release, epoch: epoch)
+            return
+        }
         await offer(release, userInitiated: userInitiated)
+    }
+
+    private func canPresentNow() -> Bool {
+        (canPresent?() ?? true) && NSApp.modalWindow == nil
+    }
+
+    /// Keeps the found release and asks again in a minute, unless a newer
+    /// start() or check superseded it.
+    private func postpone(_ release: ReleaseInfo, epoch: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.checkEpoch == epoch else { return }
+                if self.settings.skippedVersion == release.version { return }
+                guard self.canPresentNow() else {
+                    self.postpone(release, epoch: epoch)
+                    return
+                }
+                guard !self.busy else { return }
+                self.busy = true
+                defer { self.busy = false }
+                await self.offer(release, userInitiated: false)
+            }
+        }
     }
 
     private func offer(_ release: ReleaseInfo, userInitiated: Bool) async {
