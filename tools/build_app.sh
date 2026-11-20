@@ -25,10 +25,12 @@ mkdir -p build
 
 # One build per architecture, joined with lipo. This works with the Command
 # Line Tools alone; "swift build --arch a --arch b" needs the full Xcode.
+JOBARGS=()
+[[ -n "${JOBS:-}" ]] && JOBARGS=(-j "$JOBS")
 SLICES=()
 for arch in $ARCHS; do
-  swift build -c release ${JOBS:+-j $JOBS} --triple "$arch-apple-macosx$MIN_OS" --scratch-path ".build/$arch" --product "$EXE"
-  SLICES+=("$(swift build -c release ${JOBS:+-j $JOBS} --triple "$arch-apple-macosx$MIN_OS" --scratch-path ".build/$arch" --show-bin-path)/$EXE")
+  swift build -c release "${JOBARGS[@]}" --triple "$arch-apple-macosx$MIN_OS" --scratch-path ".build/$arch" --product "$EXE"
+  SLICES+=("$(swift build -c release "${JOBARGS[@]}" --triple "$arch-apple-macosx$MIN_OS" --scratch-path ".build/$arch" --show-bin-path)/$EXE")
 done
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
