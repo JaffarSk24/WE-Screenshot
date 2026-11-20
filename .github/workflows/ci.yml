@@ -40,8 +40,12 @@ jobs:
         run: swift test
 
   app:
-    name: Universal app bundle
-    runs-on: macos-26
+    name: Universal app bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
     steps:
       - uses: actions/checkout@v4
       - name: Build the app (ad hoc signature)
@@ -65,8 +69,26 @@ jobs:
           for lang in en ru sk; do test -f "$APP/Contents/Resources/$lang.lproj/Localizable.strings"; done
           # The arm64 half must start on this runner and print its version.
           "$APP/Contents/MacOS/WEScreenshot" --version
+      # A real capture of the runner's screen through ScreenCaptureKit. It
+      # depends on the Screen Recording permission of the runner image, so a
+      # failure here does not fail the build.
+      - name: Capture smoke test
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          ditto -x -k build/WE-Screenshot-*.zip "$WORK"
+          mkdir -p capture
+          "$WORK/WE Screenshot.app/Contents/MacOS/WEScreenshot" --capture-test "$PWD/capture/shot"
+          for f in capture/*.png; do sips -g pixelWidth -g pixelHeight -g dpiWidth "$f"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-${{ matrix.os }}
+          path: capture/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
-          name: WE-Screenshot-unsigned
+          name: WE-Screenshot-unsigned-${{ matrix.os }}
           path: build/WE-Screenshot-*.zip
           if-no-files-found: error
