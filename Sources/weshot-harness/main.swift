@@ -20,6 +20,13 @@ Task { @MainActor in
     runMain(width: 800, height: 600, scale: 1, prefix: "narrow-", full: false)
     runLogicChecks()
     print(failures == 0 ? "all checks passed" : "\(failures) checks failed")
+    // The colour panel stores its toolbar state under this tool's own
+    // preferences domain; leave nothing behind.
+    UserDefaults.standard.removePersistentDomain(forName: ProcessInfo.processInfo.processName)
+    UserDefaults.standard.synchronize()
+    let leftover = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Preferences/\(ProcessInfo.processInfo.processName).plist")
+    try? FileManager.default.removeItem(at: leftover)
     exit(failures == 0 ? 0 : 1)
 }
 RunLoop.main.run()
