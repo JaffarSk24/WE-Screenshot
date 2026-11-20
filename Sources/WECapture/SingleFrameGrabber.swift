@@ -93,14 +93,23 @@ final class SingleFrameGrabber: NSObject, SCStreamOutput, SCStreamDelegate {
         self.stream = nil
         lock.unlock()
 
-        if let stream = stream {
-            // The grabber stays alive through this closure, so a late frame
-            // cannot reach a deallocated output.
-            stream.stopCapture { _ in
-                _ = self
-            }
+        guard let stream = stream else {
+            continuation?.resume(with: result)
+            return
         }
-        continuation?.resume(with: result)
+        // The answer is given only after the stream has really stopped: a
+        // capture that starts while the previous stream is still closing, or
+        // a process that quits in that moment, can leave the system capture
+        // service stuck. The grabber stays alive through this closure, so a
+        // late frame cannot reach a deallocated output.
+        let resumeGate = OnceGate()
+        stream.stopCapture { _ in
+            _ = self
+            if resumeGate.pass() { continuation?.resume(with: result) }
+        }
+        queue.asyncAfter(deadline: .now() + 2) {
+            if resumeGate.pass() { continuation?.resume(with: result) }
+        }
     }
 }
 

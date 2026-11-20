@@ -136,3 +136,28 @@ func withTimeout<T>(seconds: TimeInterval, _ operation: @escaping () async throw
         }
     }
 }
+
+private typealias DisplayCreateImageFunction = @convention(c) (CGDirectDisplayID) -> Unmanaged<CGImage>?
+
+/// CGDisplayCreateImage, looked up at run time: newer SDKs no longer declare
+/// it, but macOS 13, the only system this is used on, has it.
+private let displayCreateImage: DisplayCreateImageFunction? = {
+    // RTLD_DEFAULT
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGDisplayCreateImage") else { return nil }
+    return unsafeBitCast(symbol, to: DisplayCreateImageFunction.self)
+}()
+
+/// One snapshot per screen through the classic display snapshot call, primary
+/// display first; nil when the call is missing or any display gave no image
+/// (the caller then falls back to ScreenCaptureKit).
+func legacySnapshots(of screens: [ScreenDescription], primary: UInt32) -> [DisplaySnapshot]? {
+    guard let create = displayCreateImage, !screens.isEmpty else { return nil }
+    var snapshots: [DisplaySnapshot] = []
+    for id in orderedDisplayIDs(screens.map { $0.id }, primary: primary) {
+        guard let info = displayInfo(for: id, screens: screens),
+              let image = create(id)?.takeRetainedValue(),
+              image.width > 0, image.height > 0 else { return nil }
+        snapshots.append(DisplaySnapshot(display: info, image: image))
+    }
+    return snapshots
+}

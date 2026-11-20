@@ -10,6 +10,7 @@ import WECore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let captureTestFlag = "--capture-test"
+    private static let overlayTestFlag = "--overlay-test"
 
     // The services are created at launch, not in property initialisers, so the
     // command line modes (--version, --capture-test) never build any of them.
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var skipNormalLaunch = false
     private var captureTestPrefix: String?
+    private var overlayTestPrefix: String?
     private var isPreparingCapture = false
     /// Set while one of the shell's own alerts runs, so repeated presses of the
     /// hotkey cannot stack alerts.
@@ -43,6 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             print(AppDelegate.appVersion())
             fflush(stdout)
             exit(0)
+        }
+        if let index = arguments.firstIndex(of: AppDelegate.overlayTestFlag) {
+            skipNormalLaunch = true
+            guard index + 1 < arguments.count else {
+                FileHandle.standardError.write(Data("usage: --overlay-test <path prefix>\n".utf8))
+                exit(1)
+            }
+            overlayTestPrefix = arguments[index + 1]
+            return
         }
         if let index = arguments.firstIndex(of: AppDelegate.captureTestFlag) {
             skipNormalLaunch = true
@@ -64,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let prefix = captureTestPrefix {
             runCaptureTest(prefix: prefix)
+            return
+        }
+        if let prefix = overlayTestPrefix {
+            runOverlayTest(prefix: prefix)
             return
         }
         guard !skipNormalLaunch else { return }
@@ -172,6 +187,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: Capture test (command line)
+
+    /// Shows the real overlay for a moment and photographs the screen with it
+    /// on, to check on a real Mac that the overlay covers every display.
+    private func runOverlayTest(prefix: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            FileHandle.standardError.write(Data("overlay test failed: no answer within 30 seconds\n".utf8))
+            exit(2)
+        }
+        let overlay = OverlayController(settings: settings)
+        self.overlay = overlay
+        Task { @MainActor in
+            do {
+                let shots = try await capture.captureAllDisplays()
+                var finished = false
+                overlay.begin(snapshots: shots) { _ in finished = true }
+                print("overlay active: \(overlay.isActive)")
+                for screen in NSScreen.screens {
+                    print("screen frame \(screen.frame) visible \(screen.visibleFrame)")
+                }
+                for window in NSApp.windows where window.isVisible {
+                    print("window \(type(of: window)) frame \(window.frame) level \(window.level.rawValue) key \(window.isKeyWindow)")
+                }
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+                if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
+                    for info in list {
+                        let owner = info[kCGWindowOwnerName as String] as? String ?? "?"
+                        let layer = info[kCGWindowLayer as String] as? Int ?? 0
+                        guard (info[kCGWindowOwnerPID as String] as? Int32) == getpid() || layer == 24 || layer == 20 else { continue }
+                        print("onscreen \(owner) layer \(layer) bounds \(info[kCGWindowBounds as String] ?? "") alpha \(info[kCGWindowAlpha as String] ?? "")")
+                    }
+                }
+                let live = try await capture.captureAllDisplays()
+                for (index, shot) in live.enumerated() {
+                    let data = try ImageEncoder.data(for: shot.image, format: .png, scale: shot.display.scale, jpegQuality: 1)
+                    try data.write(to: URL(fileURLWithPath: "\(prefix)-live-\(index).png"))
+                }
+                overlay.cancel()
+                try await Task.sleep(nanoseconds: 500_000_000)
+                print("overlay active after cancel: \(overlay.isActive), completion called: \(finished)")
+                fflush(stdout)
+                exit(finished && !overlay.isActive ? 0 : 3)
+            } catch {
+                FileHandle.standardError.write(Data("overlay test failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+    }
 
     private func runCaptureTest(prefix: String) {
         // A capture that never answers must not leave a hidden process behind.

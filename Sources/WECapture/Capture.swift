@@ -31,6 +31,15 @@ public final class ScreenCaptureService: ScreenCapturing {
         }
         do {
             let screens = await MainActor.run { currentScreens() }
+            if #unavailable(macOS 14.0) {
+                // macOS 13 has no one-shot ScreenCaptureKit call, and taking
+                // single frames from a stream there makes the system capture
+                // service hang after a few captures. The classic display
+                // snapshot does not go through that service at all.
+                if let snapshots = legacySnapshots(of: screens, primary: CGMainDisplayID()) {
+                    return snapshots
+                }
+            }
             // The system capture service (replayd) can stop answering after
             // days of uptime; without a limit the app would wait forever.
             let content = try await withTimeout(seconds: 6) {
