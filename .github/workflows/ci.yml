@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon, the platform the app is made for.
+          - os: macos-26
+            experimental: false
+          - os: macos-15
+            experimental: false
+          # Intel, for the x86_64 half of the universal binary.
+          - os: macos-15-intel
+            experimental: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  app:
+    name: Universal app bundle
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app (ad hoc signature)
+        run: tools/build_app.sh --no-install
+      - name: Check the bundle
+        run: |
+          set -euo pipefail
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
+          ZIP="build/WE-Screenshot-$VERSION.zip"
+          test -f "$ZIP"
+          WORK=$(mktemp -d)
+          ditto -x -k "$ZIP" "$WORK"
+          APP="$WORK/WE Screenshot.app"
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/WEScreenshot")
+          echo "architectures: $ARCHS"
+          [[ " $ARCHS " == *" arm64 "* ]]
+          [[ " $ARCHS " == *" x86_64 "* ]]
+          codesign --verify --strict --verbose=2 "$APP"
+          test "$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Contents/Info.plist")" = "sk.whiteeagles.screenshot"
+          test "$(/usr/libexec/PlistBuddy -c "Print LSMinimumSystemVersion" "$APP/Contents/Info.plist")" = "13.0"
+          for lang in en ru sk; do test -f "$APP/Contents/Resources/$lang.lproj/Localizable.strings"; done
+          # The arm64 half must start on this runner and print its version.
+          "$APP/Contents/MacOS/WEScreenshot" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WE-Screenshot-unsigned
+          path: build/WE-Screenshot-*.zip
+          if-no-files-found: error
