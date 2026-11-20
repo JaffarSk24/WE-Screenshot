@@ -13,7 +13,7 @@ Screenshots stay on your Mac unless you upload them, and uploads go only to your
 - **Copy.** Puts the picture on the clipboard as PNG and TIFF, at its on-screen size.
 - **Save.** The Save button opens a save panel; Command+S saves at once without a panel into the last used folder (the Desktop at first) and shows a notification. PNG or JPEG, and an option to save Retina screenshots at half size.
 - **Print.** Opens the standard print panel with the picture scaled to fit the page.
-- **Upload to Google Drive.** The picture goes to the folder "WE Screenshot" in your own Drive, the link is copied to the clipboard and a notification appears (a click on it opens the link). The page can be opened automatically after the upload. This needs a one-time setup, see [Google Drive setup](#google-drive-setup).
+- **Upload to Google Drive.** The picture goes to the folder "WE Screenshot" in your own Drive, a small window in the corner of the screen shows the progress and then the link with Copy and Open buttons; the link is also copied to the clipboard at once. The page can be opened automatically after the upload. This needs a one-time setup, see [Google Drive setup](#google-drive-setup).
 - **Search similar images.** Uploads the picture to your Drive and opens Google Lens with its link (see the caveat in [Google Drive setup](#google-drive-setup)).
 - **Shortcuts that work on any keyboard layout.** The selection mode shortcuts also work on a non-Latin layout, for example Command+C on a Russian keyboard.
 - **Changeable global shortcut.** Set it in Settings; if another app already uses the combination, the app tells you and keeps the previous one.
@@ -123,6 +123,7 @@ tools/import_cert.sh identity.p12      # on the second Mac
 Developer tools:
 
 - `swift run weshot-harness <folder>` renders the selection screen off screen (no window, no permission needed) into PNG files in the given folder: empty, selection, annotations, edge placement, full display and the composed result. The folder must be outside the project.
+- `WEScreenshot --upload-panel-test <path prefix>` renders the two states of the upload window into PNG files without showing anything on screen.
 - `WEScreenshot --version` prints the version and exits. `WEScreenshot --capture-test <path prefix>` captures all displays, writes each as `<prefix>-<index>.png`, prints one line per display and exits; it is a quick way to check capture and the Screen Recording permission on a real Mac.
 
 Continuous integration (GitHub Actions) builds and tests on Apple silicon runners (macOS 26 and macOS 15) and on an Intel runner, and a separate job builds the universal app bundle and checks that it contains both architectures, is validly signed, has the right bundle identifier and minimum system version, contains the English, Russian and Slovak resources and starts with `--version`.

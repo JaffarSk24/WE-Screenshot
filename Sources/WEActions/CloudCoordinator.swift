@@ -27,6 +27,7 @@ public final class CloudCoordinator {
     private var authEpoch = 0
     /// Identifies the operation that owns isBusy; cancelling releases it.
     private var busyToken = 0
+    private lazy var uploadPanel = UploadPanelController()
 
     public init(settings: SettingsStore, notifier: Notifier) {
         self.settings = settings
@@ -184,16 +185,24 @@ public final class CloudCoordinator {
     }
 
     /// Uploads the screenshot (signing in first when needed), makes it viewable
-    /// by link, copies the link to the clipboard and shows a notification.
+    /// by link, copies the link to the clipboard and shows the upload pop-up.
     /// Returns the link, or nil after an error (which was shown to the user).
     @discardableResult
     public func upload(_ screenshot: FinishedScreenshot) async -> URL? {
-        guard let result = await performUpload(screenshot) else { return nil }
+        // A second request while something is running changes nothing, and
+        // must not touch the pop-up of the upload that is under way.
+        guard !isBusy else { return nil }
+        // The pop-up goes up on the screen where the user is working now.
+        let screen = UploadPanelController.screenUnderPointer()
+        guard let result = await performUpload(screenshot, panel: (uploadPanel, screen)) else {
+            uploadPanel.close()
+            return nil
+        }
         let link = result.viewURL
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(link.absoluteString, forType: .string)
-        notifier.show(title: L("Link copied"), body: link.absoluteString, url: link)
+        uploadPanel.showDone(link: link)
         if settings.openLinkAfterUpload { NSWorkspace.shared.open(link) }
         return link
     }
@@ -255,7 +264,10 @@ public final class CloudCoordinator {
         if alert.runModal() == .alertFirstButtonReturn { onNeedsSetup?() }
     }
 
-    private func performUpload(_ screenshot: FinishedScreenshot) async -> UploadResult? {
+    /// `panel` is given only by upload(_:): the pop-up is shown once the upload
+    /// really starts (signed in, not busy) and hidden while a sign-in is pending.
+    private func performUpload(_ screenshot: FinishedScreenshot,
+                               panel: (controller: UploadPanelController, screen: NSScreen?)? = nil) async -> UploadResult? {
         guard !isBusy else { return nil }
         let token = beginBusy()
         defer { endBusy(token) }
@@ -264,11 +276,13 @@ public final class CloudCoordinator {
             guard await performSignIn() else { return nil }
         }
         guard let stack = currentStack() else { return nil }
+        panel?.controller.showUploading(on: panel?.screen)
 
         let file: (data: Data, fileName: String)
         do {
             file = try ScreenshotEncoding.fileData(for: screenshot, settings: settings)
         } catch {
+            panel?.controller.close()
             Alerts.inform(L("The screenshot was not uploaded."), error.localizedDescription)
             return nil
         }
@@ -281,15 +295,20 @@ public final class CloudCoordinator {
             } catch CloudError.notSignedIn where !retried {
                 // Tokens were revoked: sign in once more and try once more.
                 retried = true
+                panel?.controller.close()
                 guard await performSignIn() else { return nil }
+                panel?.controller.showUploading(on: panel?.screen)
             } catch let error as CloudError {
                 if case .sharingForbidden = error {
+                    panel?.controller.close()
                     Alerts.inform(L("Uploaded, but not shared."), error.localizedDescription)
                 } else {
+                    panel?.controller.close()
                     Alerts.inform(L("The screenshot was not uploaded."), error.localizedDescription)
                 }
                 return nil
             } catch {
+                panel?.controller.close()
                 Alerts.inform(L("The screenshot was not uploaded."), error.localizedDescription)
                 return nil
             }

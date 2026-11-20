@@ -1,5 +1,4 @@
 "The client secret could not be saved to the keychain." = "Не удалось сохранить секрет клиента в Связке ключей.";
-"Link copied" = "Ссылка скопирована";
 "Google sign-in did not work." = "Не удалось войти через Google.";
 "Google Drive is not set up yet." = "Google Drive ещё не настроен.";
 "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "В этой сборке вход в Google не настроен. Клиент Google OAuth можно указать в настройках.";
@@ -27,6 +26,13 @@
 "The download was incomplete." = "Загрузка не завершена.";
 "The downloaded archive does not contain the expected app." = "В скачанном архиве нет нужного приложения.";
 "The new app is not signed like this one." = "Подпись нового приложения отличается от подписи этого.";
+"Link to the uploaded screenshot" = "Ссылка на загруженный скриншот";
+"Close" = "Закрыть";
+"Uploading the screenshot…" = "Загружаю скриншот…";
+"The link is in the clipboard" = "Ссылка в буфере обмена";
+"Copy" = "Скопировать";
+"Open" = "Открыть";
+"Copied" = "Скопировано";
 "Google Drive upload is not set up in this build." = "Загрузка в Google Drive не настроена в этой сборке.";
 "Not signed in to Google Drive." = "Вход в Google Drive не выполнен.";
 "Google sign-in was cancelled." = "Вход через Google отменён.";
@@ -59,9 +65,7 @@
 "Undo" = "Отменить";
 "Upload to Google Drive" = "Загрузить в Google Drive";
 "Print" = "Напечатать";
-"Copy" = "Скопировать";
 "Save" = "Сохранить";
-"Close" = "Закрыть";
 "Settings…" = "Настройки…";
 "Quit" = "Завершить";
 "Edit" = "Правка";

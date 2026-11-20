@@ -1,6 +1,6 @@
 import AppKit
 import ServiceManagement
-import WEActions
+@_spi(Harness) import WEActions
 import WEAnnotate
 import WECapture
 import WECloud
@@ -11,6 +11,7 @@ import WECore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let captureTestFlag = "--capture-test"
     private static let overlayTestFlag = "--overlay-test"
+    private static let uploadPanelTestFlag = "--upload-panel-test"
 
     // The services are created at launch, not in property initialisers, so the
     // command line modes (--version, --capture-test) never build any of them.
@@ -28,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var skipNormalLaunch = false
     private var captureTestPrefix: String?
     private var overlayTestPrefix: String?
+    private var uploadPanelTestPrefix: String?
     private var isPreparingCapture = false
     /// Set while one of the shell's own alerts runs, so repeated presses of the
     /// hotkey cannot stack alerts.
@@ -45,6 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             print(AppDelegate.appVersion())
             fflush(stdout)
             exit(0)
+        }
+        if let index = arguments.firstIndex(of: AppDelegate.uploadPanelTestFlag) {
+            skipNormalLaunch = true
+            guard index + 1 < arguments.count else {
+                FileHandle.standardError.write(Data("usage: --upload-panel-test <path prefix>\n".utf8))
+                exit(1)
+            }
+            uploadPanelTestPrefix = arguments[index + 1]
+            return
         }
         if let index = arguments.firstIndex(of: AppDelegate.overlayTestFlag) {
             skipNormalLaunch = true
@@ -79,6 +90,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let prefix = overlayTestPrefix {
             runOverlayTest(prefix: prefix)
+            return
+        }
+        if let prefix = uploadPanelTestPrefix {
+            runUploadPanelTest(prefix: prefix)
             return
         }
         guard !skipNormalLaunch else { return }
@@ -187,6 +202,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: Capture test (command line)
+
+    /// Renders both states of the upload pop-up to PNG files, off screen.
+    private func runUploadPanelTest(prefix: String) {
+        let link = URL(string: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view")!
+        let jobs = [(false, "uploading"), (true, "done")]
+        for (done, name) in jobs {
+            let path = "\(prefix)-\(name).png"
+            guard let data = UploadPanelPreview.pngData(done: done, link: link),
+                  (try? data.write(to: URL(fileURLWithPath: path))) != nil else {
+                FileHandle.standardError.write(Data("upload panel test failed: \(name)\n".utf8))
+                exit(1)
+            }
+            print(path)
+        }
+        fflush(stdout)
+        exit(0)
+    }
 
     /// Shows the real overlay for a moment and photographs the screen with it
     /// on, to check on a real Mac that the overlay covers every display.

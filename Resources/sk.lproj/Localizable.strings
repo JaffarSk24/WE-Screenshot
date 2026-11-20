@@ -1,5 +1,4 @@
 "The client secret could not be saved to the keychain." = "Tajný kľúč klienta sa nepodarilo uložiť do Kľúčenky.";
-"Link copied" = "Odkaz bol skopírovaný";
 "Google sign-in did not work." = "Prihlásenie do Google zlyhalo.";
 "Google Drive is not set up yet." = "Google Drive ešte nie je nastavený.";
 "This build has no Google sign-in set up. You can enter a Google OAuth client in Settings." = "V tomto zostavení nie je nastavené prihlásenie do Google. Klienta Google OAuth môžete zadať v Nastaveniach.";
@@ -27,6 +26,13 @@
 "The download was incomplete." = "Sťahovanie nebolo dokončené.";
 "The downloaded archive does not contain the expected app." = "Stiahnutý archív neobsahuje očakávanú aplikáciu.";
 "The new app is not signed like this one." = "Nová aplikácia nie je podpísaná rovnako ako táto.";
+"Link to the uploaded screenshot" = "Odkaz na nahranú snímku obrazovky";
+"Close" = "Zavrieť";
+"Uploading the screenshot…" = "Nahrávam snímku obrazovky…";
+"The link is in the clipboard" = "Odkaz je v schránke";
+"Copy" = "Kopírovať";
+"Open" = "Otvoriť";
+"Copied" = "Skopírované";
 "Google Drive upload is not set up in this build." = "Nahrávanie na Google Drive nie je v tejto zostave nastavené.";
 "Not signed in to Google Drive." = "Nie ste prihlásený do Google Drive.";
 "Google sign-in was cancelled." = "Prihlásenie do Google bolo zrušené.";
@@ -59,9 +65,7 @@
 "Undo" = "Späť";
 "Upload to Google Drive" = "Nahrať na Google Drive";
 "Print" = "Tlačiť";
-"Copy" = "Kopírovať";
 "Save" = "Uložiť";
-"Close" = "Zavrieť";
 "Settings…" = "Nastavenia…";
 "Quit" = "Ukončiť";
 "Edit" = "Upraviť";
