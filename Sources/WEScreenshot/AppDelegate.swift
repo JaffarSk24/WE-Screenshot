@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
 
     private var skipNormalLaunch = false
+    private var captureTestPrefix: String?
     private var hotKeyTaken = false
     private var isPreparingCapture = false
 
@@ -43,7 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 FileHandle.standardError.write(Data("usage: --capture-test <path prefix>\n".utf8))
                 exit(1)
             }
-            runCaptureTest(prefix: arguments[index + 1])
+            // The capture itself starts once the app has finished launching:
+            // ScreenCaptureKit does not answer before that.
+            captureTestPrefix = arguments[index + 1]
             return
         }
         if AppDelegate.anotherInstanceRunning() {
@@ -53,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let prefix = captureTestPrefix {
+            runCaptureTest(prefix: prefix)
+            return
+        }
         guard !skipNormalLaunch else { return }
 
         notifier = Notifier()
@@ -110,6 +117,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Capture test (command line)
 
     private func runCaptureTest(prefix: String) {
+        // A capture that never answers must not leave a hidden process behind.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            FileHandle.standardError.write(Data("capture failed: no answer within 20 seconds\n".utf8))
+            exit(2)
+        }
         Task { @MainActor in
             do {
                 let shots = try await capture.captureAllDisplays()
@@ -195,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch error {
         case CaptureError.noDisplays:
             alert.informativeText = L("No display was found.")
+        case CaptureError.notResponding:
+            alert.informativeText = L("The screen capture service of macOS is not answering. Restart the Mac and try again.")
         case CaptureError.failed(let text):
             alert.informativeText = text
         default:

@@ -8,6 +8,8 @@ public enum CaptureError: Error, Equatable {
     /// The app has no Screen Recording permission.
     case permissionDenied
     case noDisplays
+    /// The system capture service did not answer in time.
+    case notResponding
     case failed(String)
 }
 
@@ -29,7 +31,11 @@ public final class ScreenCaptureService: ScreenCapturing {
         }
         do {
             let screens = await MainActor.run { currentScreens() }
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            // The system capture service (replayd) can stop answering after
+            // days of uptime; without a limit the app would wait forever.
+            let content = try await withTimeout(seconds: 6) {
+                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            }
             let targets = matchDisplays(content.displays, to: screens)
             guard !targets.isEmpty else { throw CaptureError.noDisplays }
 

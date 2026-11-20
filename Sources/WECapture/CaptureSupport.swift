@@ -94,10 +94,45 @@ func captureDisplay(_ display: SCDisplay, info: DisplayInfo) async throws -> CGI
         let scale = CGFloat(filter.pointPixelScale)
         let size = pixelSize(points: filter.contentRect.size, scale: scale > 0 ? scale : info.scale)
         let configuration = makeConfiguration(width: size.width, height: size.height)
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        return try await withTimeout(seconds: 10) {
+            try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        }
     }
     let size = pixelSize(points: info.frame.size, scale: info.scale)
     let configuration = makeConfiguration(width: size.width, height: size.height)
     let grabber = SingleFrameGrabber(filter: filter, configuration: configuration, displayID: info.id)
     return try await grabber.grab(timeout: 5)
+}
+
+/// Lets exactly one of several racing callers through.
+final class OnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used = false
+
+    func pass() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if used { return false }
+        used = true
+        return true
+    }
+}
+
+/// Runs a system call that has no timeout of its own and gives up with
+/// CaptureError.notResponding when it does not answer in time. The call itself
+/// cannot be cancelled; a late answer is dropped.
+func withTimeout<T>(seconds: TimeInterval, _ operation: @escaping () async throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+        let gate = OnceGate()
+        Task {
+            do {
+                let value = try await operation()
+                if gate.pass() { continuation.resume(returning: value) }
+            } catch {
+                if gate.pass() { continuation.resume(throwing: error) }
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            if gate.pass() { continuation.resume(throwing: CaptureError.notResponding) }
+        }
+    }
 }

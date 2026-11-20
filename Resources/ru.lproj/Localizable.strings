@@ -95,3 +95,4 @@
 "Sign Out" = "Выйти";
 "Signed out" = "Вы вышли";
 "Not set up" = "Не настроено";
+"The screen capture service of macOS is not answering. Restart the Mac and try again." = "Служба захвата экрана macOS не отвечает. Перезагрузите Mac и повторите попытку.";

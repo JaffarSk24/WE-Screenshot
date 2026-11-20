@@ -95,3 +95,4 @@
 "Sign Out" = "Odhlásiť sa";
 "Signed out" = "Odhlásený";
 "Not set up" = "Nenastavené";
+"The screen capture service of macOS is not answering. Restart the Mac and try again." = "Služba snímania obrazovky v systéme macOS neodpovedá. Reštartujte Mac a skúste to znova.";

@@ -42,7 +42,7 @@ final class SingleFrameGrabber: NSObject, SCStreamOutput, SCStreamDelegate {
             }
 
             queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                self?.finish(.failure(CaptureError.failed("Timed out waiting for a screen frame")))
+                self?.finish(.failure(CaptureError.notResponding))
             }
 
             stream.startCapture { [weak self] error in

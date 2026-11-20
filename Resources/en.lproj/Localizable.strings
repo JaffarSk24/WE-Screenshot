@@ -95,3 +95,4 @@
 "Sign Out" = "Sign Out";
 "Signed out" = "Signed out";
 "Not set up" = "Not set up";
+"The screen capture service of macOS is not answering. Restart the Mac and try again." = "The screen capture service of macOS is not answering. Restart the Mac and try again.";
